@@ -162,8 +162,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       return true
     } catch (e) {
-      const msg = (e as APIError).message || 'Login failed'
-      setAuthError(msg)
+      const err = e as APIError
+      if (err.code === 'BACKEND_UNAVAILABLE') {
+        setAuthError('No backend server connected. Click "Continue Without Account" below to use Fortuna in local-only mode.')
+      } else {
+        setAuthError(err.message || 'Login failed')
+      }
       return false
     }
   }, [])
@@ -191,8 +195,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       return true
     } catch (e) {
-      const msg = (e as APIError).message || 'Registration failed'
-      setAuthError(msg)
+      const err = e as APIError
+      if (err.code === 'BACKEND_UNAVAILABLE') {
+        setAuthError('No backend server connected. Click "Continue Without Account" below to use Fortuna in local-only mode.')
+      } else {
+        setAuthError(err.message || 'Registration failed')
+      }
       return false
     }
   }, [])
