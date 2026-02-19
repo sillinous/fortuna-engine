@@ -75,7 +75,7 @@ async function generateTokens(user: User) {
   )
 
   // Store refresh token
-  const sessions = getStore("fortuna-sessions")
+  const sessions = getStore("fortuna-sessions", { consistency: "strong" })
   const session: Session = {
     user_id: user.id,
     refresh_token,
@@ -113,7 +113,7 @@ async function handleRegister(req: Request): Promise<Response> {
     return error("Password must be at least 8 characters")
   }
 
-  const users = getStore("fortuna-users")
+  const users = getStore("fortuna-users", { consistency: "strong" })
   const emailKey = `email:${email.toLowerCase()}`
 
   // Check if email exists
@@ -152,7 +152,7 @@ async function handleLogin(req: Request): Promise<Response> {
     return error("Email and password are required")
   }
 
-  const users = getStore("fortuna-users")
+  const users = getStore("fortuna-users", { consistency: "strong" })
   const emailKey = `email:${email.toLowerCase()}`
 
   // Look up user by email
@@ -188,7 +188,7 @@ async function handleLogout(req: Request): Promise<Response> {
   }
 
   // Clean up sessions for this user
-  const sessions = getStore("fortuna-sessions")
+  const sessions = getStore("fortuna-sessions", { consistency: "strong" })
   const { blobs } = await sessions.list({ prefix: `session:${payload.sub}:` })
   for (const blob of blobs) {
     await sessions.delete(blob.key)
@@ -208,7 +208,7 @@ async function handleRefresh(req: Request): Promise<Response> {
     return error("Invalid or expired refresh token", 401, "TOKEN_EXPIRED")
   }
 
-  const users = getStore("fortuna-users")
+  const users = getStore("fortuna-users", { consistency: "strong" })
   const user = await users.get(`user:${payload.sub}`, { type: "json" }) as User | null
   if (!user) {
     return error("User not found", 401)
@@ -236,14 +236,14 @@ async function handleMe(req: Request): Promise<Response> {
     return error("Not authenticated", 401, "AUTH_REQUIRED")
   }
 
-  const users = getStore("fortuna-users")
+  const users = getStore("fortuna-users", { consistency: "strong" })
   const user = await users.get(`user:${payload.sub}`, { type: "json" }) as User | null
   if (!user) {
     return error("User not found", 404)
   }
 
   // Get state metadata
-  const stateStore = getStore("fortuna-state")
+  const stateStore = getStore("fortuna-state", { consistency: "strong" })
   const stateMeta = await stateStore.getMetadata(`state:${user.id}`)
 
   return json({
@@ -259,7 +259,7 @@ async function handleUpdate(req: Request): Promise<Response> {
   }
 
   const updates = await req.json()
-  const users = getStore("fortuna-users")
+  const users = getStore("fortuna-users", { consistency: "strong" })
   const user = await users.get(`user:${payload.sub}`, { type: "json" }) as User | null
   if (!user) {
     return error("User not found", 404)
