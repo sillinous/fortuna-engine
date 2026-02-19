@@ -224,6 +224,19 @@ async function apiRequest<T = any>(
         throw new APIError('Session expired. Please log in again.', 401, 'TOKEN_EXPIRED')
       }
 
+      // Detect HTML responses (SPA fallback when backend is unavailable)
+      const contentType = res.headers.get('content-type') || ''
+      if (contentType.includes('text/html') || (!contentType.includes('json') && res.status === 200)) {
+        const text = await res.text()
+        if (text.trimStart().startsWith('<!DOCTYPE') || text.trimStart().startsWith('<html')) {
+          throw new APIError(
+            'Backend API is not available. Use offline mode to continue with local storage.',
+            503,
+            'BACKEND_UNAVAILABLE'
+          )
+        }
+      }
+
       const data = await res.json()
 
       if (!res.ok || data.error) {
@@ -239,7 +252,14 @@ async function apiRequest<T = any>(
       if (e instanceof APIError) throw e
       lastError = e instanceof Error ? e : new Error(String(e))
       
-      // Only retry on network errors
+      // Only retry on network errors, not backend-unavailable
+      if (lastError.message?.includes('not valid JSON') || lastError.message?.includes('Unexpected token')) {
+        throw new APIError(
+          'Backend API is not available. Use offline mode to continue with local storage.',
+          503,
+          'BACKEND_UNAVAILABLE'
+        )
+      }
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
       }
