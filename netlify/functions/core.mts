@@ -1,4 +1,4 @@
-export default async (req: Request) => {
+export default async (req) => {
   const url = new URL(req.url)
   const action = url.searchParams.get("action") || "health"
 
@@ -7,7 +7,9 @@ export default async (req: Request) => {
     action,
     version: "2.0.0-netlify",
     platform: "netlify-functions",
+    storage: "netlify-blobs",
     timestamp: new Date().toISOString(),
+    build: "v2"
   }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
