@@ -57,7 +57,7 @@ async function handleSave(req: Request): Promise<Response> {
     return error("State exceeds 5MB limit", 413)
   }
 
-  const stateStore = getStore("fortuna-state")
+  const stateStore = getStore("fortuna-state", { consistency: "strong" })
   const key = `state:${payload.sub}`
 
   // Check version conflict (unless force)
@@ -118,7 +118,7 @@ async function handleLoad(req: Request): Promise<Response> {
     return error("Not authenticated", 401, "AUTH_REQUIRED")
   }
 
-  const stateStore = getStore("fortuna-state")
+  const stateStore = getStore("fortuna-state", { consistency: "strong" })
   const key = `state:${payload.sub}`
 
   const result = await stateStore.getWithMetadata(key)
@@ -161,7 +161,7 @@ async function handleMerge(req: Request): Promise<Response> {
     return error("Local state is required")
   }
 
-  const stateStore = getStore("fortuna-state")
+  const stateStore = getStore("fortuna-state", { consistency: "strong" })
   const key = `state:${payload.sub}`
 
   const remote = await stateStore.getWithMetadata(key)
