@@ -14,7 +14,7 @@
 
 import type { Context, Config } from "@netlify/functions"
 import { getStore } from "@netlify/blobs"
-import { signJWT, verifyJWT, hashPassword, verifyPassword, type JWTPayload } from "./jwt.mts"
+import { signJWT, verifyJWT, hashPassword, verifyPassword, type JWTPayload } from "./_shared/jwt.mts"
 
 // ---- Types ----
 
