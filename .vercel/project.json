@@ -1,0 +1,8 @@
+{
+  "orgId": "team_ss3yefGtSp2rYg1jf083dziG",
+  "settings": {
+    "framework": "vite",
+    "buildCommand": "npm run build",
+    "outputDirectory": "dist"
+  }
+}

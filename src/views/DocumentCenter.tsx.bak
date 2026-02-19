@@ -1,0 +1,220 @@
+import { useState, useMemo, useRef } from 'react'
+import { useFortuna } from '../hooks/useFortuna'
+import { getAvailableDocuments, type GeneratedDocument, type DocumentTemplate } from '../engine/document-generator'
+import { FileText, Download, Printer, Eye, ChevronRight, FileCheck, Briefcase, Shield, Receipt } from 'lucide-react'
+
+export function DocumentCenter() {
+  const { state } = useFortuna()
+  const [selectedDoc, setSelectedDoc] = useState<GeneratedDocument | null>(null)
+  const [activeCategory, setActiveCategory] = useState<string>('all')
+  const previewRef = useRef<HTMLDivElement>(null)
+  
+  const templates = useMemo(() => getAvailableDocuments(state), [state])
+  
+  const categories = [
+    { key: 'all', label: 'All Documents', icon: <FileText size={16} /> },
+    { key: 'tax', label: 'Tax Documents', icon: <Receipt size={16} /> },
+    { key: 'audit', label: 'Audit Prep', icon: <Shield size={16} /> },
+    { key: 'cpa', label: 'CPA Package', icon: <Briefcase size={16} /> },
+    { key: 'entity', label: 'Entity Formation', icon: <FileCheck size={16} /> },
+  ]
+  
+  const filtered = activeCategory === 'all' ? templates : templates.filter(t => t.category === activeCategory)
+  
+  const generateDoc = (template: DocumentTemplate) => {
+    const doc = template.generator(state)
+    setSelectedDoc(doc)
+  }
+  
+  const handlePrint = () => {
+    if (!selectedDoc) return
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html><head><title>${selectedDoc.title}</title>
+        <style>body { margin: 0; } @media print { body { margin: 0; } }</style>
+        </head><body>${selectedDoc.content}</body></html>
+      `)
+      printWindow.document.close()
+      printWindow.print()
+    }
+  }
+  
+  const handleDownload = () => {
+    if (!selectedDoc) return
+    const blob = new Blob([`
+      <!DOCTYPE html>
+      <html><head><meta charset="utf-8"><title>${selectedDoc.title}</title></head>
+      <body>${selectedDoc.content}</body></html>
+    `], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${selectedDoc.id}.html`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  
+  const typeLabels: Record<string, { label: string; color: string }> = {
+    voucher: { label: 'VOUCHER', color: 'var(--accent-gold)' },
+    checklist: { label: 'CHECKLIST', color: 'var(--accent-emerald)' },
+    worksheet: { label: 'WORKSHEET', color: 'var(--accent-blue, #60a5fa)' },
+    report: { label: 'REPORT', color: 'var(--accent-blue, #60a5fa)' },
+    letter: { label: 'LETTER', color: 'var(--text-secondary)' },
+  }
+  
+  return (
+    <div style={{ padding: 32, maxWidth: 1200, display: 'flex', gap: 24, minHeight: 'calc(100vh - 64px)' }}>
+      {/* Left: Document List */}
+      <div style={{ width: selectedDoc ? 360 : '100%', flexShrink: 0, transition: 'width 0.3s ease' }}>
+        {/* Header */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <FileText size={24} style={{ color: 'var(--accent-gold)' }} />
+            <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, color: 'var(--text-primary)', margin: 0 }}>
+              Document Center
+            </h1>
+          </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: 0 }}>
+            Generate tax documents, checklists, and CPA handoff packages
+          </p>
+        </div>
+        
+        {/* Category tabs */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
+          {categories.map(cat => (
+            <button
+              key={cat.key}
+              onClick={() => setActiveCategory(cat.key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '7px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                background: activeCategory === cat.key ? 'var(--accent-gold-dim)' : 'var(--bg-elevated)',
+                color: activeCategory === cat.key ? 'var(--accent-gold)' : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: 500, transition: 'all 0.2s',
+              }}
+            >
+              {cat.icon} {cat.label}
+            </button>
+          ))}
+        </div>
+        
+        {/* Document list */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {filtered.map(template => {
+            const typeInfo = typeLabels[template.type] || typeLabels.report
+            
+            return (
+              <button
+                key={template.id}
+                onClick={() => generateDoc(template)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14,
+                  padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border-subtle)',
+                  background: selectedDoc?.id === template.id.split('-').slice(0, -1).join('-') || selectedDoc?.id?.startsWith(template.id)
+                    ? 'var(--accent-gold-dim)' : 'var(--bg-elevated)',
+                  cursor: 'pointer', textAlign: 'left', width: '100%',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-gold)' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-subtle)' }}
+              >
+                <div style={{
+                  width: 40, height: 40, borderRadius: 10,
+                  background: `${typeInfo.color}15`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  <FileText size={18} style={{ color: typeInfo.color }} />
+                </div>
+                
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
+                    {template.title}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {template.description}
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: 4, fontSize: 9, fontWeight: 700,
+                    letterSpacing: '0.05em', color: typeInfo.color, background: `${typeInfo.color}15`,
+                  }}>
+                    {typeInfo.label}
+                  </span>
+                  <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      
+      {/* Right: Document Preview */}
+      {selectedDoc && (
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Preview toolbar */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: '12px 12px 0 0',
+            border: '1px solid var(--border-subtle)', borderBottom: 'none',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Eye size={14} style={{ color: 'var(--accent-gold)' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {selectedDoc.title}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={handlePrint}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px',
+                  borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--bg-primary)',
+                  color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 500,
+                }}
+              >
+                <Printer size={13} /> Print
+              </button>
+              <button
+                onClick={handleDownload}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px',
+                  borderRadius: 8, border: 'none', background: 'var(--accent-gold)',
+                  color: '#0c0e12', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                }}
+              >
+                <Download size={13} /> Download
+              </button>
+            </div>
+          </div>
+          
+          {/* Preview content */}
+          <div
+            ref={previewRef}
+            style={{
+              background: '#ffffff',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '0 0 12px 12px',
+              minHeight: 500,
+              maxHeight: 'calc(100vh - 200px)',
+              overflow: 'auto',
+            }}
+            dangerouslySetInnerHTML={{ __html: selectedDoc.content }}
+          />
+          
+          {/* Meta info */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', padding: '10px 4px',
+            fontSize: 11, color: 'var(--text-muted)',
+          }}>
+            <span>Generated: {new Date(selectedDoc.generatedAt).toLocaleString()}</span>
+            <span>Tax Year: {selectedDoc.applicableYear}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
