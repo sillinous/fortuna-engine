@@ -12,9 +12,9 @@
  * that reference multiple modules simultaneously.
  */
 
-import type { FortunaState } from './storage'
+import type { FortunaState, ReceiptRecord, LegalEntity } from './storage'
 import { generateTaxReport, type TaxReport } from './tax-calculator'
-import { detectStrategies, analyzeRisks, calculateHealthScore, type Strategy } from './strategy-detector'
+import { detectStrategies, type DetectedStrategy } from './strategy-detector'
 import { compareRetirementVehicles, type RetirementComparison } from './retirement-optimizer'
 import { analyzeTaxCredits, type TaxCreditSummary } from './tax-credits'
 import { runMultiYearAnalysis, type MultiYearAnalysis } from './multi-year-tax'
@@ -24,6 +24,7 @@ import { analyzeAuditRisk, type AuditRiskProfile } from './audit-risk'
 import { generateHealthReport, type FinancialHealthReport } from './health-score'
 import { generateProactiveAlerts, type ProactiveAlert } from './proactive-intelligence'
 import { hasPortfolioData, computePortfolioSummary, getPortfolioTaxIncome } from './portfolio-bridge'
+import { processReceipts, type AllocationResult } from './receipt-engine'
 
 // ===================================================================
 //  TYPES
@@ -50,7 +51,7 @@ export interface NexusAction {
 export interface UnifiedIntelligence {
   // Raw engine outputs (cached for AI advisor)
   taxReport: TaxReport
-  strategies: Strategy[]
+  strategies: DetectedStrategy[]
   retirement: RetirementComparison
   credits: TaxCreditSummary
   multiYear: MultiYearAnalysis
@@ -59,6 +60,7 @@ export interface UnifiedIntelligence {
   auditRisk: AuditRiskProfile
   healthReport: FinancialHealthReport
   alerts: ProactiveAlert[]
+  receiptAllocations: AllocationResult[]
 
   // Cross-engine synthesis
   nexusInsights: NexusInsight[]
@@ -78,12 +80,10 @@ export interface UnifiedIntelligence {
 function detectRetirementCreditNexus(
   tax: TaxReport,
   credits: TaxCreditSummary,
-  retirement: RetirementComparison,
   state: FortunaState,
 ): NexusInsight | null {
   // If retirement contributions could reduce AGI enough to unlock credits
   const saversCredit = credits.credits.find(c => c.id === 'savers')
-  const eitc = credits.credits.find(c => c.id === 'eitc')
 
   if (tax.retirementGap > 5000) {
     // Check if maxing retirement unlocks Saver's Credit
@@ -116,18 +116,15 @@ function detectRetirementCreditNexus(
 }
 
 function detectDepreciationTimingNexus(
-  tax: TaxReport,
   multiYear: MultiYearAnalysis,
   depreciation: DepreciationSummary,
 ): NexusInsight | null {
   // If high-bracket year AND bonus depreciation phasing down — buy now
-  const currentYear = new Date().getFullYear()
   const baseline = multiYear.baseline
 
   if (baseline.length < 2) return null
 
   const thisYear = baseline[0]
-  const nextYear = baseline[1]
   const bonusRate = depreciation.bonusDepreciationRate
 
   if (thisYear.marginalRate >= 0.24 && bonusRate > (depreciation.bonusDepreciationRate - 0.20)) {
@@ -158,7 +155,6 @@ function detectDepreciationTimingNexus(
 
 function detectEntityTaxCreditNexus(
   tax: TaxReport,
-  entityOpt: EntityOptimizerResult,
   credits: TaxCreditSummary,
   state: FortunaState,
 ): NexusInsight | null {
@@ -201,7 +197,6 @@ function detectEntityTaxCreditNexus(
 
 function detectTCJARetirementNexus(
   multiYear: MultiYearAnalysis,
-  retirement: RetirementComparison,
   tax: TaxReport,
 ): NexusInsight | null {
   // If TCJA sunset is within projection window AND retirement gap exists — front-load
@@ -210,7 +205,6 @@ function detectTCJARetirementNexus(
 
   const yearsUntilSunset = sunsetYear.year - new Date().getFullYear()
   const totalFrontLoad = Math.round(tax.retirementGap * yearsUntilSunset)
-  const currentRateSavings = Math.round(totalFrontLoad * tax.marginalRate)
   const postSunsetRate = sunsetYear.marginalRate
   const rateGap = postSunsetRate - tax.marginalRate
 
@@ -237,7 +231,6 @@ function detectTCJARetirementNexus(
 function detectAuditProtectionNexus(
   audit: AuditRiskProfile,
   tax: TaxReport,
-  depreciation: DepreciationSummary,
   state: FortunaState,
 ): NexusInsight | null {
   // High audit risk + large deductions = documentation nexus
@@ -269,7 +262,6 @@ function detectAuditProtectionNexus(
 function detectStateArbitrageEntityNexus(
   state: FortunaState,
   tax: TaxReport,
-  entityOpt: EntityOptimizerResult,
 ): NexusInsight | null {
   // If state tax is high AND entity restructuring could help
   const stateRate = tax.stateTax / (tax.grossIncome || 1)
@@ -302,9 +294,166 @@ function detectStateArbitrageEntityNexus(
   return null
 }
 
+function detectReceiptOptimizationNexus(
+  allocations: AllocationResult[],
+  tax: TaxReport
+): NexusInsight | null {
+  const needsReview = allocations.reduce((sum: number, r: any) => sum + r.itemsNeedingReview, 0)
+  const totalBusinessFound = allocations.reduce((sum: number, r: any) => sum + r.allocatedBusiness, 0)
+  const potentialTaxSaving = Math.round(totalBusinessFound * tax.marginalRate)
+
+  if (totalBusinessFound > 500) {
+    return {
+      id: 'receipt-optimization-nexus',
+      title: 'Hidden Deductions in Receipt Scans',
+      description: `We identified $${totalBusinessFound.toLocaleString()} in potential business expenses across your recent scans. At your ${(tax.marginalRate * 100).toFixed(0)}% tax bracket, these represent $${potentialTaxSaving.toLocaleString()} in immediate tax savings.`,
+      engines: ['Receipt Engine', 'Tax Calculator', 'Entity Optimizer'],
+      impact: potentialTaxSaving,
+      priority: 'high',
+      category: 'compound_savings',
+      actions: [
+        { label: 'Review Allocations', view: 'receipts', detail: `Review ${needsReview} items needing manual entity assignment` },
+        { label: 'Sync to Ledger', view: 'taxdocs', detail: 'Finalize and commit these expenses to your tax return' }
+      ],
+      reasoning: `By analyzing individual line items, we found expenses with business keywords (e.g. software, travel) that were not yet categorized. Direct allocation to your LLCs reduces self-employment and income tax.`
+    }
+  }
+  return null
+}
+
+function detectSubscriptionOverlapNexus(
+  receipts: ReceiptRecord[]
+): NexusInsight | null {
+  if (!receipts || receipts.length === 0) return null
+
+  const activeSubscriptions = receipts.filter(r => r.isRecurring)
+  if (activeSubscriptions.length < 2) return null
+
+  // Map category -> Set of Merchants
+  const categoryMerchants: Record<string, Set<string>> = {}
+
+  for (const r of activeSubscriptions) {
+    for (const item of r.items) {
+      if (item.allocatedEntityId && item.allocatedEntityId !== 'personal') {
+        const cat = item.inferredCategory
+        if (!categoryMerchants[cat]) categoryMerchants[cat] = new Set()
+        categoryMerchants[cat].add(r.merchantName)
+      }
+    }
+  }
+
+  const overlaps = Object.entries(categoryMerchants)
+    .filter(([_, merchants]) => merchants.size > 1)
+    .map(([cat, merchants]) => ({ category: cat, merchants: Array.from(merchants) }))
+
+  if (overlaps.length > 0) {
+    const totalPotentialSavings = overlaps.length * 120 // Rough estimate $10/mo consolidated
+    return {
+      id: 'subscription-overlap-nexus',
+      title: 'Redundant Subscriptions Detected',
+      description: `We found overlapping recurring charges in ${overlaps.length} categories (e.g., ${overlaps[0].merchants.slice(0, 2).join(' and ')} for ${overlaps[0].category}). Consolidating these under a single business license could save ~$${totalPotentialSavings.toLocaleString()}/yr.`,
+      engines: ['Receipt Engine'],
+      impact: totalPotentialSavings,
+      priority: 'medium',
+      category: 'compound_savings',
+      actions: [
+        { label: 'Consolidate Subscriptions', view: 'receipts', detail: 'View overlapping recurring service charges' }
+      ],
+      reasoning: `Maintaining separate individual subscriptions for redundant tools (e.g. storage, conferencing, software) across different legal entities or personal scope is inefficient. Consolidating into team or enterprise plans often yields 15-30% savings.`
+    }
+  }
+
+  return null
+}
+
+function detectComminglingRiskNexus(
+  receipts: ReceiptRecord[],
+  entities: LegalEntity[]
+): NexusInsight | null {
+  if (!receipts || receipts.length === 0) return null
+
+  const commingled = receipts.filter(r => {
+    if (r.status !== 'allocated' || !r.paymentMethodId) return false
+
+    // Check if any business entity items are in this receipt
+    const businessItems = r.items.filter(i => i.allocatedEntityId && i.allocatedEntityId !== 'personal')
+    if (businessItems.length === 0) return false
+
+    // Usually a single receipt uses a single payment method. 
+    // We check if the main allocated entity for this receipt matches the account.
+    const entityId = businessItems[0].allocatedEntityId
+    const entity = entities.find(e => e.id === entityId)
+
+    if (!entity) return false
+
+    // If entity has linked accounts, check if paymentMethodId is in that list.
+    if (entity.linkedAccountIds && entity.linkedAccountIds.length > 0) {
+      return !entity.linkedAccountIds.includes(r.paymentMethodId)
+    }
+
+    return false
+  })
+
+  if (commingled.length > 0) {
+    const totalRiskAmount = commingled.reduce((sum, r) => sum + r.totalAmount, 0)
+    // Find the first entity name for the description
+    const sampleEntityId = commingled[0].items.find(i => i.allocatedEntityId !== 'personal')?.allocatedEntityId
+    const sampleEntity = entities.find(e => e.id === sampleEntityId)
+
+    return {
+      id: 'commingling-risk-nexus',
+      title: 'Corporate Veil Breach Warning',
+      description: `We detected $${totalRiskAmount.toLocaleString()} in business expenses (e.g., for ${sampleEntity?.name || 'your business'}) paid via accounts not dedicated to that entity. This "commingling" of funds can jeopardize your limited liability protection.`,
+      engines: ['Receipt Engine', 'Entity Optimizer'],
+      impact: totalRiskAmount,
+      priority: 'high',
+      category: 'risk_mitigation',
+      actions: [
+        { label: 'Review Risks', view: 'receipts', detail: 'Identify and reimburse commingled expenses' }
+      ],
+      reasoning: `To maintain the "Corporate Veil" (limited liability), business expenses must be paid from dedicated business accounts. When personal funds are used, a formal reimbursement entry is required to preserve the legal separation of the entity.`
+    }
+  }
+
+  return null
+}
+
+function detectSafeHarborAdjustmentNexus(
+  receipts: ReceiptRecord[],
+  tax: TaxReport
+): NexusInsight | null {
+  if (!receipts || receipts.length === 0) return null
+
+  const totalNewBusinessSpend = receipts.reduce((sum, r) => {
+    if (r.status !== 'allocated') return sum
+    const businessSum = r.items.reduce((s, i) => (i.allocatedEntityId && i.allocatedEntityId !== 'personal') ? s + i.amount : s, 0)
+    return sum + businessSum
+  }, 0)
+
+  if (totalNewBusinessSpend > 2000) {
+    const taxVulnerabilityReduction = Math.round(totalNewBusinessSpend * tax.marginalRate)
+    const suggestedQuarterlyReduction = Math.round(taxVulnerabilityReduction / 4)
+
+    return {
+      id: 'safe-harbor-adjustment-nexus',
+      title: 'Safe Harbor Dynamic Optimization',
+      description: `We identified $${totalNewBusinessSpend.toLocaleString()} in new business expenses across your scans. This discovery reduces your estimated annual tax bill by ~$${taxVulnerabilityReduction.toLocaleString()}. You can reduce your next estimated tax payment by $${suggestedQuarterlyReduction.toLocaleString()} while staying within Safe Harbor protection.`,
+      engines: ['Receipt Engine', 'Tax Calculator', 'multi-year-tax'],
+      impact: taxVulnerabilityReduction,
+      priority: 'medium',
+      category: 'compound_savings',
+      actions: [
+        { label: 'Adjust Payments', view: 'tax', detail: `Update Q${Math.ceil((new Date().getMonth() + 1) / 3)} estimated payment by -$${suggestedQuarterlyReduction.toLocaleString()}` }
+      ],
+      reasoning: `Safe Harbor rules (110% of prior year tax) protect against underpayment penalties, but real-time expense discovery allows you to safely reduce current-year payments to match actual projected liability. This optimizes cash flow without incurring interest charges.`
+    }
+  }
+
+  return null
+}
+
 function detectIncomeGrowthBracketNexus(
   multiYear: MultiYearAnalysis,
-  strategies: Strategy[],
 ): NexusInsight | null {
   const baseline = multiYear.baseline
   if (baseline.length < 3) return null
@@ -352,30 +501,43 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
   const auditRisk = analyzeAuditRisk(state)
   const healthReport = generateHealthReport(state)
   const alerts = generateProactiveAlerts(state)
+  const receiptAllocations = processReceipts(state)
 
   // ── Phase 2: Cross-engine nexus detection ──
   const nexusInsights: NexusInsight[] = []
 
-  const n1 = detectRetirementCreditNexus(taxReport, credits, retirement, state)
+  const n1 = detectRetirementCreditNexus(taxReport, credits, state)
   if (n1) nexusInsights.push(n1)
 
-  const n2 = detectDepreciationTimingNexus(taxReport, multiYear, depreciation)
+  const n2 = detectDepreciationTimingNexus(multiYear, depreciation)
   if (n2) nexusInsights.push(n2)
 
-  const n3 = detectEntityTaxCreditNexus(taxReport, entityOpt, credits, state)
+  const n3 = detectEntityTaxCreditNexus(taxReport, credits, state)
   if (n3) nexusInsights.push(n3)
 
-  const n4 = detectTCJARetirementNexus(multiYear, retirement, taxReport)
+  const n4 = detectTCJARetirementNexus(multiYear, taxReport)
   if (n4) nexusInsights.push(n4)
 
-  const n5 = detectAuditProtectionNexus(auditRisk, taxReport, depreciation, state)
+  const n5 = detectAuditProtectionNexus(auditRisk, taxReport, state)
   if (n5) nexusInsights.push(n5)
 
-  const n6 = detectStateArbitrageEntityNexus(state, taxReport, entityOpt)
+  const n6 = detectStateArbitrageEntityNexus(state, taxReport)
   if (n6) nexusInsights.push(n6)
 
-  const n7 = detectIncomeGrowthBracketNexus(multiYear, strategies)
+  const n7 = detectIncomeGrowthBracketNexus(multiYear)
   if (n7) nexusInsights.push(n7)
+
+  const n8 = detectReceiptOptimizationNexus(receiptAllocations, taxReport)
+  if (n8) nexusInsights.push(n8)
+
+  const n9 = detectSubscriptionOverlapNexus(state.receipts || [])
+  if (n9) nexusInsights.push(n9)
+
+  const n10 = detectComminglingRiskNexus(state.receipts || [], state.entities || [])
+  if (n10) nexusInsights.push(n10)
+
+  const n11 = detectSafeHarborAdjustmentNexus(state.receipts || [], taxReport)
+  if (n11) nexusInsights.push(n11)
 
   // ── Portfolio Intelligence nexus insights ────────────────────────
   if (hasPortfolioData()) {
@@ -469,12 +631,12 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
 
   // Estimated payments + Income forecast = safe harbor optimization
   const estPayments = state.estimatedPayments || []
-  const missedEst = estPayments.filter(p => {
+  const missedEst = estPayments.filter((p: any) => {
     const due = new Date(p.dueDate)
     return due < new Date() && (!p.paidAmount || p.paidAmount === 0)
   })
   if (missedEst.length > 0) {
-    const totalMissed = missedEst.reduce((s, p) => s + p.amount, 0)
+    const totalMissed = missedEst.reduce((s: number, p: any) => s + p.amount, 0)
     const penaltyEst = Math.round(totalMissed * 0.04)
     nexusInsights.push({
       id: 'est-payment-penalty-nexus',
@@ -494,9 +656,9 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
 
   // Depreciation + Entity structure = §179 per-entity optimization
   const depAssets = (state.depreciationAssets || []).filter(a => a.isActive)
-  const entitiesWithAssets = new Set(depAssets.map(a => a.entityId || 'personal'))
+  const entitiesWithAssets = new Set(depAssets.map((a: any) => a.entityId || 'personal'))
   if (entitiesWithAssets.size > 1 && depAssets.length >= 3) {
-    const totalBasis = depAssets.reduce((s, a) => s + a.purchasePrice, 0)
+    const totalBasis = depAssets.reduce((s: number, a: any) => s + (a.purchasePrice || 0), 0)
     nexusInsights.push({
       id: 'depreciation-entity-split',
       title: 'Multi-Entity Depreciation Strategy',
@@ -514,9 +676,9 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
 
   // Retirement accounts + Goals = alignment check
   const retAccounts = state.retirementAccounts || []
-  const retGoals = (state.goals || []).filter(g => g.type === 'retirement' && g.status === 'active')
+  const retGoals = (state.goals || []).filter((g: any) => g.type === 'retirement' && g.status === 'active')
   if (retAccounts.length > 0 && retGoals.length > 0) {
-    const totalBalance = retAccounts.reduce((s, a) => s + (a.balance || 0), 0)
+    const totalBalance = retAccounts.reduce((s: number, a: any) => s + (a.balance || 0), 0)
     const targetAmount = retGoals[0].targetAmount || 0
     if (targetAmount > 0 && totalBalance < targetAmount * 0.5) {
       const gap = targetAmount - totalBalance
@@ -563,7 +725,7 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
       d.unearnedIncome && d.unearnedIncome > 2500 && d.age < 19
     )
     if (atRisk.length > 0) {
-      const totalKiddieTax = atRisk.reduce((s, d) => {
+      const totalKiddieTax = atRisk.reduce((s: number, d: any) => {
         const parentRateAmount = Math.max(0, (d.unearnedIncome || 0) - 2500)
         return s + Math.round(parentRateAmount * taxReport.marginalRate)
       }, 0)
@@ -587,8 +749,8 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
   // (Actual detection runs when portfolio view loads — flag presence of multi-entity positions)
   const multiEntityInvestors = new Set(
     state.incomeStreams
-      .filter(s => s.isActive && s.type === 'investment')
-      .map(s => s.entityId || 'personal')
+      .filter((s: any) => s.isActive && s.type === 'investment')
+      .map((s: any) => s.entityId || 'personal')
   )
   if (multiEntityInvestors.size > 1) {
     nexusInsights.push({
@@ -609,7 +771,7 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
   // Sort by impact
   nexusInsights.sort((a, b) => b.impact - a.impact)
 
-  const totalCompoundSavings = nexusInsights.reduce((s, n) => s + n.impact, 0)
+  const totalCompoundSavings = nexusInsights.reduce((s: number, n: any) => s + n.impact, 0)
   const topAction = nexusInsights[0]?.actions[0] || null
 
   return {
@@ -623,6 +785,7 @@ export function runUnifiedIntelligence(state: FortunaState): UnifiedIntelligence
     auditRisk,
     healthReport,
     alerts,
+    receiptAllocations,
     nexusInsights,
     totalCompoundSavings,
     topPriorityAction: topAction,
@@ -684,9 +847,9 @@ export function buildIntelligenceBrief(intel: UnifiedIntelligence): string {
   }
 
   // Entity optimization
-  if (intel.entityOpt && intel.entityOpt.scenarios) {
+  if (intel.entityOpt && intel.entityOpt.recommended) {
     sections.push(`\nENTITY OPTIMIZATION:`)
-    sections.push(`  Recommended: ${intel.entityOpt.recommended.entityType} — ${intel.entityOpt.summary}`)
+    sections.push(`  Recommended: ${intel.entityOpt.recommended.label} — ${intel.entityOpt.summary}`)
     sections.push(`  Max Savings: $${intel.entityOpt.maxSavings.toLocaleString()}`)
   }
 
@@ -701,6 +864,16 @@ export function buildIntelligenceBrief(intel: UnifiedIntelligence): string {
     sections.push(`  TOTAL COMPOUND SAVINGS POTENTIAL: $${intel.totalCompoundSavings.toLocaleString()}`)
   }
 
+  // Receipt intelligence summary
+  const ra = intel.receiptAllocations
+  if (ra && ra.length > 0) {
+    const totalBusinessFound = ra.reduce((s: number, r: any) => s + r.allocatedBusiness, 0)
+    const reviewNeeded = ra.reduce((s: number, r: any) => s + r.itemsNeedingReview, 0)
+    sections.push(`\nRECEIPT INTELLIGENCE:`)
+    sections.push(`  Processed: ${ra.length} receipts | Business Expenses Found: $${totalBusinessFound.toLocaleString()}`)
+    if (reviewNeeded > 0) sections.push(`  ⚠️ Action Required: ${reviewNeeded} items need manual entity allocation`)
+  }
+
   // Portfolio Intelligence summary
   if (hasPortfolioData()) {
     const ps = computePortfolioSummary()
@@ -709,7 +882,7 @@ export function buildIntelligenceBrief(intel: UnifiedIntelligence): string {
     if (ps.netCapitalGains !== 0) sections.push(`  Net Capital Gains: $${Math.round(ps.netCapitalGains).toLocaleString()} (ST: $${Math.round(ps.shortTermGains - ps.shortTermLosses).toLocaleString()} + LT: $${Math.round(ps.longTermGains - ps.longTermLosses).toLocaleString()})`)
     if (ps.ordinaryIncomeFromPortfolio > 0) sections.push(`  Portfolio Ordinary Income: $${Math.round(ps.ordinaryIncomeFromPortfolio).toLocaleString()} (staking: $${Math.round(ps.stakingRewards).toLocaleString()}, airdrops: $${Math.round(ps.airdropIncome).toLocaleString()}, mining: $${Math.round(ps.miningIncome).toLocaleString()})`)
     if (ps.pendingTaxEvents > 0) sections.push(`  Pending Tax Events: ${ps.pendingTaxEvents} (~$${Math.round(ps.estimatedTaxableFromEvents).toLocaleString()} est. taxable)`)
-    if (ps.harvestCandidates.length > 0) sections.push(`  Tax-Loss Harvesting: ${ps.harvestCandidates.length} candidates ($${Math.round(ps.harvestCandidates.reduce((s, c) => s + c.loss, 0)).toLocaleString()} harvestable)`)
+    if (ps.harvestCandidates.length > 0) sections.push(`  Tax-Loss Harvesting: ${ps.harvestCandidates.length} candidates ($${Math.round(ps.harvestCandidates.reduce((s: number, c: any) => s + c.loss, 0)).toLocaleString()} harvestable)`)
     sections.push(`  Risk: avg ${ps.avgRiskScore.toFixed(1)}/10 | Concentration: ${ps.concentrationRisk.toFixed(0)}%`)
     if (ps.activeOpportunities + ps.watchingOpportunities > 0) sections.push(`  Pipeline: ${ps.activeOpportunities} active, ${ps.watchingOpportunities} watching ($${Math.round(ps.totalPipelineValue).toLocaleString()} expected value)`)
   }

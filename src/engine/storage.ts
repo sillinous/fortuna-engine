@@ -10,7 +10,7 @@
 // ===================================================================
 //  SCHEMA VERSION — increment on ANY data shape change
 // ===================================================================
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 15
 
 // ===================================================================
 //  STORAGE KEYS
@@ -181,7 +181,11 @@ const migrations: Record<number, (state: any) => any> = {
       ...state,
       household,
       taxYear: new Date().getFullYear(),
-      incomeStreams: backfillAttribution(state.incomeStreams),
+      incomeStreams: backfillAttribution(state.incomeStreams).map((s: any) => ({
+        ...s,
+        isPrimary: s.isPrimary ?? false,
+        isTaxable: s.isTaxable ?? true
+      })),
       expenses: backfillAttribution(state.expenses),
       deductions: backfillAttribution(state.deductions),
       depreciationAssets: [],
@@ -194,6 +198,39 @@ const migrations: Record<number, (state: any) => any> = {
       carryforwards: {},
     }
   },
+  9: (state: any) => ({
+    ...state,
+    realEstate: state.realEstate ?? [],
+    estatePlan: state.estatePlan ?? { trusts: [], directives: [], lifeInsurance: [] },
+  }),
+  10: (state: any) => ({
+    ...state,
+    liabilities: state.liabilities ?? [],
+  }),
+  11: (state: any) => ({
+    ...state,
+    equityCompensation: state.equityCompensation ?? [],
+  }),
+  12: (state: any) => ({
+    ...state,
+    receipts: state.receipts ?? [],
+  }),
+  13: (state: any) => ({
+    ...state,
+    receipts: (state.receipts || []).map((r: any) => ({
+      ...r,
+      paymentMethodId: r.paymentMethodId ?? null,
+      isRecurring: r.isRecurring ?? false,
+    }))
+  }),
+  14: (state: any) => ({
+    ...state,
+    intakeBatches: state.intakeBatches ?? [],
+    receipts: (state.receipts || []).map((r: any) => ({
+      ...r,
+      batchId: r.batchId ?? null
+    }))
+  }),
 }
 
 async function migrateIfNeeded(state: FortunaState): Promise<FortunaState> {
@@ -322,6 +359,8 @@ export interface IncomeStream extends Attribution {
   isActive: boolean
   monthlyBreakdown?: number[]
   notes?: string
+  isPrimary?: boolean // v9 addition
+  isTaxable?: boolean // v9 addition
   // W-2 specific fields
   w2?: {
     employerName?: string
@@ -366,6 +405,7 @@ export interface LegalEntity {
   officerSalary?: number       // S-Corp reasonable salary
   healthInsurancePremium?: number
   retirementContrib?: number
+  linkedAccountIds?: string[]  // IDs of dedicated business accounts
   notes?: string
   // QBI fields
   isSSTB?: boolean             // Specified Service Trade or Business (law, health, consulting, etc.)
@@ -380,6 +420,125 @@ export interface Deduction extends Attribution {
   amount: number
   isItemized: boolean
   notes?: string
+}
+
+// ─── Metamodel v13 Additions ──────────────────────────────────────
+
+export interface RealEstateProperty extends Attribution {
+  id: string
+  address: string
+  type: 'primary_residence' | 'rental' | 'commercial' | 'land' | 'other'
+  purchasePrice: number
+  purchaseDate: string
+  currentValue: number
+  outstandingMortgage: number
+  annualPropertyTax: number
+  annualInsurance: number
+  monthlyRentalIncome?: number
+  is1031Eligible?: boolean
+}
+
+export interface TrustEntity extends Attribution {
+  id: string
+  name: string
+  type: 'revocable' | 'irrevocable' | 'charitable' | 'special_needs' | 'other'
+  trustees: string[]
+  beneficiaries: string[]
+  assets: string[] // IDs of assets held in trust
+  isGrantor: boolean
+}
+
+export interface EstateDirective {
+  id: string
+  type: 'will' | 'living_will' | 'power_of_attorney' | 'healthcare_proxy'
+  status: 'draft' | 'signed' | 'notarized'
+  lastUpdated: string
+  fileUrl?: string
+}
+
+export interface LifeInsurancePolicy extends Attribution {
+  id: string
+  provider: string
+  policyType: 'term' | 'whole' | 'universal' | 'variable'
+  deathBenefit: number
+  annualPremium: number
+  beneficiaries: string[]
+  cashValue?: number
+  expirationDate?: string
+}
+
+export interface EstatePlan {
+  trusts: TrustEntity[]
+  directives: EstateDirective[]
+  lifeInsurance: LifeInsurancePolicy[]
+}
+
+export interface Liability extends Attribution {
+  id: string
+  name: string
+  type: 'mortgage' | 'student_loan' | 'auto_loan' | 'credit_card' | 'business_loan' | 'margin' | 'other'
+  principalBalance: number
+  interestRate: number
+  minimumMonthlyPayment: number
+  termMonths?: number
+  isInterestTaxDeductible?: boolean
+}
+
+export interface EquityCompensation extends Attribution {
+  id: string
+  companyName: string
+  grantType: 'iso' | 'nso' | 'rsu' | 'espp' | 'founder_stock'
+  grantDate: string
+  totalSharesGranted: number
+  vestingSchedule: 'standard_4yr_1yr_cliff' | 'custom' | 'immediate'
+  vestedShares: number
+  unvestedShares: number
+  strikePrice?: number
+  currentFairMarketValue: number
+  has83bElection?: boolean
+  expirationDate?: string
+}
+
+export interface ReceiptItem {
+  id: string
+  description: string
+  amount: number
+  quantity: number
+  inferredCategory: string
+  allocatedEntityId?: string // 'personal' or specific LegalEntity.id
+  confidenceScore: number    // 0-1 for AI assignment
+  isBusiness?: boolean       // Explicit override flag
+  status?: 'scanned' | 'processing' | 'allocated' | 'needs_review'
+}
+
+export interface ReceiptRecord extends Attribution {
+  id: string
+  merchantName: string
+  date: string
+  totalAmount: number
+  taxAmount?: number
+  tipAmount?: number
+  items: ReceiptItem[]
+  imageUrl?: string
+  status: 'scanned' | 'processing' | 'allocated' | 'needs_review'
+  splitStrategy?: 'itemized' | 'proportional' | 'manual'
+  paymentMethodId?: string // Link to account/card
+  isRecurring?: boolean   // Subscription flag
+  batchId?: string        // Link to IntakeBatch
+}
+
+export interface IntakeBatch extends Attribution {
+  id: string
+  name: string
+  dateStarted: string
+  dateCompleted?: string
+  status: 'uploading' | 'processing' | 'completed' | 'failed'
+  totalCount: number
+  successCount: number
+  errorCount: number
+  receiptIds: string[]
+  progress: number // 0-100
+  defaultEntityId?: string // Override for all receipts in batch
 }
 
 // ─── Previously Orphaned Types (now persisted in FortunaState) ──────
@@ -501,7 +660,6 @@ export interface AdvisorMessage {
 // ─── FortunaState: The Unified Root ─────────────────────────────────
 
 export interface FortunaState {
-  // Core (existing)
   profile: FinancialProfile
   incomeStreams: IncomeStream[]
   expenses: BusinessExpense[]
@@ -511,26 +669,38 @@ export interface FortunaState {
   lastUpdated: string
   onboardingComplete: boolean
 
-  // Metamodel v9 additions
-  household?: Household
-  taxYear?: number
-  depreciationAssets?: DepreciationAsset[]
-  investments?: InvestmentPosition[]
-  retirementAccounts?: RetirementAccount[]
-  goals?: FinancialGoal[]
-  documents?: DocumentRecord[]
-  bankTransactions?: BankTransaction[]
-  estimatedPayments?: EstimatedPayment[]
-  carryforwards?: Carryforwards
+  household: Household
+  taxYear: number
+  depreciationAssets: DepreciationAsset[]
+  investmentPortfolio: InvestmentPosition[]
+  retirementAccounts: RetirementAccount[]
+  goals: FinancialGoal[]
+  documents: DocumentRecord[]
+  auditHistory: BankTransaction[] // Renamed from bankTransactions
+  estimatedPayments: EstimatedPayment[]
+  carryforwards: Carryforwards
 
-  // v10.6 Metamodel — cross-view persistence
-  portfolioOpportunities?: any[]  // OpportunityAnalysis from PortfolioIntelligence
-  portfolioTaxEvents?: any[]      // TaxEvent from PortfolioIntelligence
-  scenarioSnapshots?: any[]       // Saved scenario comparisons from ScenarioModeler
-  aiDocuments?: any[]             // AI-generated documents from DocumentCenter
+  // v13 Additions
+  realEstate: RealEstateProperty[]
+  estatePlan: EstatePlan
+  liabilities: Liability[]
+  equityCompensation: EquityCompensation[]
+  receipts: ReceiptRecord[]
+  intakeBatches: IntakeBatch[]
 
-  // Flexible extension
-  [key: string]: any
+  // Cross-view persistence
+  portfolioOpportunities: any[]  // OpportunityAnalysis from PortfolioIntelligence
+  portfolioTaxEvents: any[]      // TaxEvent from PortfolioIntelligence
+  scenarioSnapshots: any[]       // Saved scenario comparisons from ScenarioModeler
+  aiDocuments: any[]             // AI-generated documents from DocumentCenter
+
+  // UX preferences (moved from separate storage)
+  ux: {
+    sidebarCollapsed: boolean
+    activeView: string
+    theme: 'light' | 'dark' | 'auto'
+    lastSaved: string
+  }
 }
 
 // ===================================================================
@@ -572,17 +742,32 @@ export function createDefaultState(): FortunaState {
     deductions: [],
     strategies: [],
     depreciationAssets: [],
-    investments: [],
+    investmentPortfolio: [],
     retirementAccounts: [],
     goals: [],
     documents: [],
-    bankTransactions: [],
+    auditHistory: [], // Renamed from bankTransactions
     estimatedPayments: [],
     carryforwards: {},
+
+    // v13 Additions
+    realEstate: [],
+    estatePlan: { trusts: [], directives: [], lifeInsurance: [] },
+    liabilities: [],
+    equityCompensation: [],
+    receipts: [],
+    intakeBatches: [],
+
     portfolioOpportunities: [],
     portfolioTaxEvents: [],
     scenarioSnapshots: [],
     aiDocuments: [],
+    ux: {
+      sidebarCollapsed: false,
+      activeView: 'dashboard',
+      theme: 'auto',
+      lastSaved: new Date().toISOString(),
+    },
     lastUpdated: new Date().toISOString(),
     onboardingComplete: false,
   }
