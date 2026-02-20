@@ -28,9 +28,17 @@ export interface AISettings {
   clientKeys: Partial<Record<ProviderId, string>>
 }
 
+export interface ChatMessagePart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: {
+    url: string // e.g., "data:image/jpeg;base64,..."
+  }
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
-  content: string
+  content: string | ChatMessagePart[]
 }
 
 export interface AIResponse {
@@ -308,10 +316,28 @@ async function directOpenAI(messages: ChatMessage[], system: string, model: stri
 
 // ---- Gemini Direct ----
 async function directGemini(messages: ChatMessage[], system: string, model: string, apiKey: string): Promise<AIResponse> {
-  const contents = messages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }))
+  const contents = messages.map(m => {
+    let parts: any[] = []
+    if (typeof m.content === 'string') {
+      parts = [{ text: m.content }]
+    } else {
+      parts = m.content.map(part => {
+        if (part.type === 'text') return { text: part.text }
+        if (part.type === 'image_url' && part.image_url) {
+          // Gemini expects base64 data without the data:image/jpeg;base64, prefix
+          const match = part.image_url.url.match(/^data:(image\/[a-z]+);base64,(.*)$/)
+          if (match) {
+            return { inlineData: { mimeType: match[1], data: match[2] } }
+          }
+        }
+        return null
+      }).filter(Boolean)
+    }
+    return {
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts,
+    }
+  })
   
   const payload: any = {
     contents,

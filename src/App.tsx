@@ -37,6 +37,7 @@ const ProactiveAlerts = lazy(() => import('./views/ProactiveAlerts').then(m => (
 const TaxCalendar = lazy(() => import('./views/TaxCalendar').then(m => ({ default: m.TaxCalendar })))
 const DocumentCenter = lazy(() => import('./views/DocumentCenter').then(m => ({ default: m.DocumentCenter })))
 const DataImport = lazy(() => import('./views/DataImport').then(m => ({ default: m.DataImport })))
+const ReceiptIntake = lazy(() => import('./views/ReceiptIntake').then(m => ({ default: m.ReceiptIntake })))
 const Workflows = lazy(() => import('./views/Workflows').then(m => ({ default: m.Workflows })))
 // v6
 const EntityOptimizer = lazy(() => import('./views/EntityOptimizer').then(m => ({ default: m.EntityOptimizer })))
@@ -70,14 +71,14 @@ const FinTechConnections = lazy(() => import('./views/FinTechConnections'))
 const TransactionReview = lazy(() => import('./views/TransactionReview'))
 const FinTechHub = lazy(() => import('./views/FinTechHub'))
 
-export type ViewKey = 'dashboard' | 'tax' | 'entity' | 'revenue' | 'risk' | 'automations' | 'advisor' | 'setup' | 'scenarios' | 'timeline' | 'flow' | 'reports' | 'cashflow' | 'audit' | 'alerts' | 'calendar' | 'documents' | 'import' | 'workflows' | 'optimizer' | 'health' | 'cpa' | 'data' | 'history' | 'taxdocs' | 'retirement' | 'arbitrage' | 'multiyear' | 'depreciation' | 'credits' | 'nexus' | 'pnl' | 'paycheck' | 'deductions' | 'marginal' | 'goals' | 'taxprep' | 'workspace' | 'portfolio' | 'quickbooks' | 'fintech' | 'txn-review'
+export type ViewKey = 'dashboard' | 'tax' | 'entity' | 'revenue' | 'risk' | 'automations' | 'advisor' | 'setup' | 'scenarios' | 'timeline' | 'flow' | 'reports' | 'cashflow' | 'audit' | 'alerts' | 'calendar' | 'documents' | 'import' | 'receipt-scan' | 'workflows' | 'optimizer' | 'health' | 'cpa' | 'data' | 'history' | 'taxdocs' | 'retirement' | 'arbitrage' | 'multiyear' | 'depreciation' | 'credits' | 'nexus' | 'pnl' | 'paycheck' | 'deductions' | 'marginal' | 'goals' | 'taxprep' | 'workspace' | 'portfolio' | 'quickbooks' | 'fintech' | 'fintech-hub' | 'txn-review'
 
 const VALID_VIEWS = new Set<ViewKey>([
   'dashboard','tax','entity','revenue','risk','automations','advisor','setup',
   'scenarios','timeline','flow','reports','cashflow','audit','alerts','calendar',
-  'documents','import','workflows','optimizer','health','cpa','data','history','taxdocs',
+  'documents', 'import', 'receipt-scan', 'workflows', 'optimizer', 'health', 'cpa', 'data', 'history', 'taxdocs',
   'retirement','arbitrage','multiyear','depreciation','credits','nexus','pnl',
-  'paycheck','deductions','marginal','goals','taxprep','workspace','portfolio','quickbooks','fintech','txn-review',
+  'paycheck', 'deductions', 'marginal', 'goals', 'taxprep', 'workspace', 'portfolio', 'quickbooks', 'fintech', 'fintech-hub', 'txn-review',
 ])
 
 function AppInner() {
@@ -176,6 +177,7 @@ function AppInner() {
       case 'calendar': return <TaxCalendar />
       case 'documents': return <DocumentCenter />
       case 'import': return <DataImport />
+      case 'receipt-scan': return <ReceiptIntake />
       case 'workflows': return <Workflows onNavigate={setActiveView} />
       // v6
       case 'optimizer': return <EntityOptimizer />
