@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react'
-import { Camera, Image as ImageIcon, Upload, Check, List, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle } from 'lucide-react'
+import React, { useState } from 'react'
+import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 import { MobileReceiptScanner } from '../components/MobileReceiptScanner'
 import { processReceiptImage } from '../engine/vision-processor'
@@ -15,6 +15,7 @@ export function ReceiptIntake() {
     const [currentBatch, setCurrentBatch] = useState<BatchIntakeJob | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [processingMessage, setProcessingMessage] = useState('Extracting receipt details...')
+    const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
 
     const handleStartScanning = () => {
         setError(null)
@@ -22,7 +23,8 @@ export function ReceiptIntake() {
     }
 
     const handleImageCapture = async (base64Image: string) => {
-        setStage('processing')
+        // In Turbo Mode, we stay in 'scanning' stage and process concurrently
+        setBackgroundProcessingCount(prev => prev + 1)
         setError(null)
 
         try {
@@ -35,27 +37,27 @@ export function ReceiptIntake() {
 
             const newReceipt = visionResult.receipt
 
-            // 2. Initialize or retrieve batch
-            let activeBatch = currentBatch
-            if (!activeBatch) {
-                activeBatch = createBatch('mobile_scan', 'Mobile Scan Session')
-                setCurrentBatch(activeBatch)
-                updateState(s => ({ ...s, batchJobs: [...s.batchJobs, activeBatch!] }))
-            }
-
-            // Associate with batch
-            newReceipt.batchId = activeBatch.id
+            // 2. Initialize or retrieve batch (need functional state update to avoid race conditions with concurrent scans)
+            setCurrentBatch(prevBatch => {
+                let activeBatch = prevBatch
+                if (!activeBatch) {
+                    activeBatch = createBatch('mobile_scan', 'Mobile Scan Session')
+                    updateState(s => ({ ...s, batchJobs: [...s.batchJobs, activeBatch!] }))
+                }
+                newReceipt.batchId = activeBatch.id
+                return activeBatch
+            })
 
             // Update local state
             setScannedReceipts(prev => [...prev, newReceipt])
             updateState(s => ({ ...s, receipts: [...s.receipts, newReceipt] }))
 
-            // Prompt user: review current batch or scan another
-            setStage('review')
-
         } catch (err: any) {
-            setError(err.message || "An unexpected error occurred during processing.")
-            setStage('review') // Go back to review so they can try again or see existing scans
+            console.error(err)
+            // We don't want to throw a fatal error that breaks the scanning flow. Just log or show a passive toast.
+            // For now, quietly fail the single scan and let the user re-scan.
+        } finally {
+            setBackgroundProcessingCount(prev => prev - 1)
         }
     }
 
@@ -91,16 +93,25 @@ export function ReceiptIntake() {
     return (
         <div style={{ padding: 32, maxWidth: 800, margin: '0 auto', minHeight: 'calc(100vh - 64px)' }}>
 
-            <div style={{ marginBottom: 32 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                    <Camera size={28} style={{ color: 'var(--accent-gold)' }} />
-                    <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, color: 'var(--text-primary)', margin: 0 }}>
-                        Mobile Intake
-                    </h1>
+            <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                        <Camera size={28} style={{ color: 'var(--accent-gold)' }} />
+                        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, color: 'var(--text-primary)', margin: 0 }}>
+                            Mobile Intake
+                        </h1>
+                    </div>
+                    <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: 0 }}>
+                        Auto-capture receipts with your camera to extract data and categorize expenses.
+                    </p>
                 </div>
-                <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: 0 }}>
-                    Auto-capture receipts with your camera to extract data and categorize expenses.
-                </p>
+
+                {backgroundProcessingCount > 0 && stage !== 'scanning' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'var(--accent-gold-dim)', borderRadius: 20, color: 'var(--accent-gold)' }}>
+                        <Loader2 size={16} className="spin" />
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>{backgroundProcessingCount} Extracting</span>
+                    </div>
+                )}
             </div>
 
             {/* Error Banner */}
@@ -158,12 +169,13 @@ export function ReceiptIntake() {
             {/* Stage: Review */}
             {stage === 'review' && (
                 <div>
+                    <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                         <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>
                             Scanned Items ({scannedReceipts.length})
                         </div>
                         <button onClick={handleStartScanning} style={styles.secondaryButton}>
-                            <Camera size={16} /> Scan Another
+                            <Camera size={16} /> Scan More
                         </button>
                     </div>
 
@@ -190,8 +202,16 @@ export function ReceiptIntake() {
                         <button onClick={resetSession} style={{ ...styles.secondaryButton, flex: 1, padding: 16 }}>
                             <RefreshCw size={18} /> Discard Batch
                         </button>
-                        <button onClick={handleProcessBatch} style={{ ...styles.primaryButtonLarge, flex: 2, padding: 16 }}>
-                            <Check size={18} /> Finalize Intake <ArrowRight size={18} />
+                        <button
+                            onClick={handleProcessBatch}
+                            disabled={backgroundProcessingCount > 0}
+                            style={{ ...styles.primaryButtonLarge, flex: 2, padding: 16, opacity: backgroundProcessingCount > 0 ? 0.5 : 1 }}
+                        >
+                            {backgroundProcessingCount > 0 ? (
+                                <><Loader2 size={18} className="spin" /> Waiting for extraction...</>
+                            ) : (
+                                <><Check size={18} /> Finalize Intake <ArrowRight size={18} /></>
+                            )}
                         </button>
                     </div>
                 </div>
