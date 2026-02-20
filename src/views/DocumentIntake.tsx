@@ -17,6 +17,7 @@ export function DocumentIntake() {
     const [processingMessage, setProcessingMessage] = useState('Extracting receipt details...')
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
     const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
+    const [scannedImageCount, setScannedImageCount] = useState(0)
 
     const stats = useMemo(() => {
         const result = {
@@ -65,6 +66,7 @@ export function DocumentIntake() {
     const handleImageCapture = async (base64Image: string) => {
         // In Turbo Mode, we stay in 'scanning' stage and process concurrently
         setBackgroundProcessingCount((prev: number) => prev + 1)
+        setScannedImageCount(prev => prev + 1)
         setError(null)
 
         try {
@@ -140,7 +142,7 @@ export function DocumentIntake() {
     }
 
     const handleProcessBatch = async () => {
-        if (!currentBatch || scannedDocuments.length === 0) return
+        if (!currentBatch) return
 
         setStage('processing')
         setProcessingMessage('Applying routing rules & entity assignment...')
@@ -262,7 +264,7 @@ export function DocumentIntake() {
             {stage === 'scanning' && (
                 <MobileDocumentScanner
                     onCapture={handleImageCapture}
-                    onClose={() => setStage(scannedDocuments.length > 0 ? 'review' : 'idle')}
+                    onClose={() => setStage(scannedImageCount > 0 ? 'review' : 'idle')}
                 />
             )}
 
@@ -416,9 +418,7 @@ export function DocumentIntake() {
                     <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8, textAlign: 'center' }}>
                         Processing Complete
                     </h2>
-                    <p style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 32, textAlign: 'center' }}>
-                        {stats.categorizedCount} documents processed and {stats.notApplicableCount} marked as not applicable.
-                    </p>
+                    {stats.categorizedCount} documents processed from {scannedImageCount} captures. {stats.notApplicableCount} marked as not applicable.
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginBottom: 32 }}>
                         {/* Summary Totals */}
