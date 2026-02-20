@@ -30,7 +30,7 @@ Extract the relevant data and respond ONLY with a JSON object matching this sche
      "taxAmount": "number or 0",
      "tipAmount": "number or 0",
      "lineItems": [
-       { "description": "string", "amount": "number", "category": "best guess business category" }
+       { "description": "string", "amount": "number", "category": "best guess business category (e.g. Dining, Travel, Supplies)" }
      ],
 
      // IF documentType === 'tax_notice':

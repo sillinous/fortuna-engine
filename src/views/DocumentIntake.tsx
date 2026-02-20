@@ -16,6 +16,7 @@ export function DocumentIntake() {
     const [error, setError] = useState<string | null>(null)
     const [processingMessage, setProcessingMessage] = useState('Extracting receipt details...')
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
+    const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
 
     const handleStartScanning = () => {
         setError(null)
@@ -121,6 +122,42 @@ export function DocumentIntake() {
         }
     }
 
+    const handleUpdateDocMetadata = (docId: string, field: string, value: any) => {
+        setScannedDocuments(prev => prev.map(doc => {
+            if (doc.id === docId) {
+                return {
+                    ...doc,
+                    metadata: {
+                        ...doc.metadata,
+                        [field]: value
+                    }
+                }
+            }
+            return doc
+        }))
+    }
+
+    const handleUpdateLineItem = (docId: string, itemId: string, field: string, value: any) => {
+        setScannedDocuments(prev => prev.map(doc => {
+            if (doc.id === docId) {
+                const lineItems = doc.metadata.lineItems?.map((item: any) => {
+                    if (item.id === itemId) {
+                        return { ...item, [field]: value }
+                    }
+                    return item
+                })
+                return {
+                    ...doc,
+                    metadata: {
+                        ...doc.metadata,
+                        lineItems
+                    }
+                }
+            }
+            return doc
+        }))
+    }
+
     const resetSession = () => {
         setStage('idle')
         setScannedDocuments([])
@@ -218,25 +255,92 @@ export function DocumentIntake() {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 32 }}>
-                        {scannedDocuments.map(doc => (
-                            <div key={doc.id} style={styles.receiptRow}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                                    <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : 'rgba(59,130,246,0.06)' }}>
-                                        {doc.documentType === 'receipt' ? <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} /> : <FileText size={18} style={{ color: '#3b82f6' }} />}
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
-                                            {doc.documentType} • {doc.metadata.merchantName || doc.metadata.agency || doc.metadata.subject || 'Document'}
+                        {scannedDocuments.map(doc => {
+                            const isExpanded = expandedDocId === doc.id
+                            return (
+                                <div key={doc.id} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                    <div
+                                        onClick={() => setExpandedDocId(isExpanded ? null : doc.id)}
+                                        style={{ ...styles.receiptRow, cursor: 'pointer', borderBottomLeftRadius: isExpanded ? 0 : 12, borderBottomRightRadius: isExpanded ? 0 : 12 }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                                            <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : 'rgba(59,130,246,0.06)' }}>
+                                                {doc.documentType === 'receipt' ? <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} /> : <FileText size={18} style={{ color: '#3b82f6' }} />}
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                                                    {doc.documentType} • {doc.metadata.merchantName || doc.metadata.agency || doc.metadata.subject || 'Document'}
+                                                </div>
+                                                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(doc.dateAdded).toLocaleDateString()}</div>
+                                            </div>
                                         </div>
-                                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(doc.dateAdded).toLocaleDateString()}</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                                            <div style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                                {doc.metadata.totalAmount ? `$${Number(doc.metadata.totalAmount).toFixed(2)}` : ''}
+                                                {doc.metadata.amountDue ? `$${Number(doc.metadata.amountDue).toFixed(2)}` : ''}
+                                            </div>
+                                            <div style={{ color: 'var(--text-muted)', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                                                <ArrowRight size={16} />
+                                            </div>
+                                        </div>
                                     </div>
+
+                                    {isExpanded && (
+                                        <div style={styles.expandedContent}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 20 }}>
+                                                <div style={styles.inputGroup}>
+                                                    <label style={styles.label}>Merchant / Name</label>
+                                                    <input
+                                                        style={styles.input}
+                                                        value={doc.metadata.merchantName || doc.metadata.subject || ''}
+                                                        onChange={(e) => handleUpdateDocMetadata(doc.id, doc.documentType === 'receipt' ? 'merchantName' : 'subject', e.target.value)}
+                                                    />
+                                                </div>
+                                                <div style={styles.inputGroup}>
+                                                    <label style={styles.label}>Total Amount</label>
+                                                    <input
+                                                        style={styles.input}
+                                                        type="number"
+                                                        value={doc.metadata.totalAmount || doc.metadata.amountDue || 0}
+                                                        onChange={(e) => handleUpdateDocMetadata(doc.id, doc.metadata.totalAmount ? 'totalAmount' : 'amountDue', parseFloat(e.target.value))}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {doc.metadata.lineItems && doc.metadata.lineItems.length > 0 && (
+                                                <div>
+                                                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
+                                                        Line Items ({doc.metadata.lineItems.length})
+                                                    </div>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                                        {doc.metadata.lineItems.map((item: any) => (
+                                                            <div key={item.id} style={styles.lineItemRow}>
+                                                                <input
+                                                                    style={{ ...styles.inputPlain, flex: 1 }}
+                                                                    value={item.description}
+                                                                    onChange={(e) => handleUpdateLineItem(doc.id, item.id, 'description', e.target.value)}
+                                                                />
+                                                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                                                    <div style={styles.categoryBadge}>
+                                                                        {item.inferredCategory || 'Misc'}
+                                                                    </div>
+                                                                    <input
+                                                                        style={{ ...styles.inputPlain, width: 80, textAlign: 'right', fontWeight: 600 }}
+                                                                        type="number"
+                                                                        value={item.amount}
+                                                                        onChange={(e) => handleUpdateLineItem(doc.id, item.id, 'amount', parseFloat(e.target.value))}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
-                                <div style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    {doc.metadata.totalAmount ? `$${Number(doc.metadata.totalAmount).toFixed(2)}` : ''}
-                                    {doc.metadata.amountDue ? `$${Number(doc.metadata.amountDue).toFixed(2)}` : ''}
-                                </div>
-                            </div>
-                        ))}
+                            )
+                        })}
                     </div>
 
                     <div style={{ display: 'flex', gap: 16, borderTop: '1px solid var(--border-subtle)', paddingTop: 24 }}>
@@ -320,5 +424,60 @@ const styles: Record<string, React.CSSProperties> = {
     docIcon: {
         width: 40, height: 40, borderRadius: 10,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+    },
+    expandedContent: {
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid var(--border-subtle)',
+        borderTop: 'none',
+        borderBottomLeftRadius: 12,
+        borderBottomRightRadius: 12,
+        padding: 20,
+        marginBottom: 8,
+    },
+    inputGroup: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+    },
+    label: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--text-muted)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+    },
+    input: {
+        background: 'rgba(0,0,0,0.2)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        color: 'var(--text-primary)',
+        fontSize: 14,
+        outline: 'none',
+    },
+    inputPlain: {
+        background: 'transparent',
+        border: 'none',
+        color: 'var(--text-primary)',
+        fontSize: 14,
+        outline: 'none',
+        padding: '4px 0',
+    },
+    lineItemRow: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '8px 12px',
+        background: 'rgba(255,255,255,0.03)',
+        borderRadius: 8,
+    },
+    categoryBadge: {
+        fontSize: 10,
+        fontWeight: 700,
+        padding: '4px 8px',
+        borderRadius: 6,
+        background: 'var(--accent-gold-dim)',
+        color: 'var(--accent-gold)',
+        textTransform: 'uppercase',
     }
 }
