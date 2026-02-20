@@ -209,7 +209,7 @@ function AppInner() {
       case 'quickbooks': return <QuickBooksImport />
       case 'fintech': return <FinTechConnections />
       case 'txn-review': return <TransactionReview />
-      case 'fintech': return <FinTechHub />
+      case 'fintech-hub': return <FinTechHub />
       default: return <Dashboard onNavigate={setActiveView} />
     }
   }, [activeView, state.onboardingComplete, setActiveView])

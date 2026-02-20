@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Camera, X, Check, Loader2 } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 
-interface MobileReceiptScannerProps {
+interface MobileDocumentScannerProps {
     onCapture: (imageData: string) => void
     onClose: () => void
-export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScannerProps) {
+}
+
+export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScannerProps) {
     const videoRef = useRef<HTMLVideoElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -64,7 +66,7 @@ export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScanne
 
     // Auto-Capture logic (Motion detection)
     useEffect(() => {
-        if (!hasPermission || capturedImage || isCapturing) {
+        if (!hasPermission || capturedImages.length > 0 || isCapturing) {
             if (frameInterval.current) window.clearInterval(frameInterval.current)
             return
         }
