@@ -10,7 +10,7 @@
 // ===================================================================
 //  SCHEMA VERSION — increment on ANY data shape change
 // ===================================================================
-const SCHEMA_VERSION = 15
+const SCHEMA_VERSION = 16
 
 // ===================================================================
 //  STORAGE KEYS
@@ -231,6 +231,21 @@ const migrations: Record<number, (state: any) => any> = {
       batchId: r.batchId ?? null
     }))
   }),
+  15: (state: any) => ({
+    ...state,
+    documents: state.documents ?? []
+  }),
+  16: (state: any) => ({
+    ...state,
+    documents: (state.documents || []).map((d: any) => ({
+      ...d,
+      batchId: d.batchId ?? null
+    })),
+    intakeBatches: (state.intakeBatches || []).map((b: any) => ({
+      ...b,
+      documentIds: b.documentIds ?? []
+    }))
+  }),
 }
 
 async function migrateIfNeeded(state: FortunaState): Promise<FortunaState> {
@@ -413,13 +428,30 @@ export interface LegalEntity {
   qualifiedPropertyUBIA?: number // Unadjusted basis of qualified property
 }
 
-export interface Deduction extends Attribution {
+export interface DeductionRecord {
   id: string
-  name: string
-  category: 'standard' | 'home_office' | 'vehicle' | 'retirement' | 'health' | 'education' | 'charitable' | 'business' | 'other'
+  entityId: string // Which entity is claiming this (e.g. personal, sole_prop)
+  categoryId: string // e.g. supplies, travel, home_office
   amount: number
-  isItemized: boolean
-  notes?: string
+  description: string
+  date: string
+  status: 'planned' | 'realized' | 'rejected'
+  receiptId?: string
+}
+
+export type DocumentType = 'receipt' | 'invoice' | 'tax_notice' | 'contract' | 'identity' | 'other'
+
+export interface DocumentRecord {
+  id: string
+  documentType: DocumentType
+  dateAdded: string
+  sourceFile: string // e.g., URL or base64 (though large base64 should be careful in LS)
+  metadata: Record<string, any> // Flexible payload for specific types
+  entityId?: string // Optional link to a specific entity
+  goalId?: string // Optional link to a financial goal
+  status: 'pending' | 'processed' | 'needs_review' | 'rejected'
+  summary?: string
+  batchId?: string // Link to IntakeBatch
 }
 
 // ─── Metamodel v13 Additions ──────────────────────────────────────
@@ -537,6 +569,7 @@ export interface IntakeBatch extends Attribution {
   successCount: number
   errorCount: number
   receiptIds: string[]
+  documentIds: string[]
   progress: number // 0-100
   defaultEntityId?: string // Override for all receipts in batch
 }
@@ -590,18 +623,6 @@ export interface FinancialGoal extends Attribution {
   targetDate?: string
   priority: 'high' | 'medium' | 'low'
   status: 'active' | 'completed' | 'paused'
-  notes?: string
-}
-
-export interface DocumentRecord extends Attribution {
-  id: string
-  name: string
-  type: 'w2' | '1099' | 'receipt' | 'contract' | 'tax_return' | 'bank_statement' | 'invoice' | 'other'
-  category?: string
-  uploadDate: string
-  fileSize?: number
-  mimeType?: string
-  storageKey?: string          // Reference to actual file in vault
   notes?: string
 }
 
@@ -664,7 +685,7 @@ export interface FortunaState {
   incomeStreams: IncomeStream[]
   expenses: BusinessExpense[]
   entities: LegalEntity[]
-  deductions: Deduction[]
+  deductions: DeductionRecord[] // Changed from Deduction to DeductionRecord
   strategies: StrategyRecord[]
   lastUpdated: string
   onboardingComplete: boolean
@@ -675,7 +696,7 @@ export interface FortunaState {
   investmentPortfolio: InvestmentPosition[]
   retirementAccounts: RetirementAccount[]
   goals: FinancialGoal[]
-  documents: DocumentRecord[]
+  documents: DocumentRecord[] // Changed from DocumentRecord (Attribution) to new DocumentRecord
   auditHistory: BankTransaction[] // Renamed from bankTransactions
   estimatedPayments: EstimatedPayment[]
   carryforwards: Carryforwards

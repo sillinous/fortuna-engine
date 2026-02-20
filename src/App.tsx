@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy } from 'react'
+import React, { useState, useEffect, useCallback, lazy } from 'react'
 import { FortunaProvider, useFortuna } from './hooks/useFortuna'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { AuthScreen } from './views/AuthScreen'
@@ -37,7 +37,7 @@ const ProactiveAlerts = lazy(() => import('./views/ProactiveAlerts').then(m => (
 const TaxCalendar = lazy(() => import('./views/TaxCalendar').then(m => ({ default: m.TaxCalendar })))
 const DocumentCenter = lazy(() => import('./views/DocumentCenter').then(m => ({ default: m.DocumentCenter })))
 const DataImport = lazy(() => import('./views/DataImport').then(m => ({ default: m.DataImport })))
-const ReceiptIntake = lazy(() => import('./views/ReceiptIntake').then(m => ({ default: m.ReceiptIntake })))
+const DocumentIntake = lazy(() => import('./views/DocumentIntake').then(m => ({ default: m.DocumentIntake })))
 const Workflows = lazy(() => import('./views/Workflows').then(m => ({ default: m.Workflows })))
 // v6
 const EntityOptimizer = lazy(() => import('./views/EntityOptimizer').then(m => ({ default: m.EntityOptimizer })))
@@ -82,7 +82,7 @@ const VALID_VIEWS = new Set<ViewKey>([
 ])
 
 function AppInner() {
-  const { state, loading, strategies, healthScore, uxPrefs, updateUXPrefs } = useFortuna()
+  const { state, loading, healthScore, uxPrefs, updateUXPrefs } = useFortuna()
   const { addToast } = useToasts()
   const [activeView, setActiveViewRaw] = useState<ViewKey>('dashboard')
   const [mounted, setMounted] = useState(false)
@@ -149,7 +149,7 @@ function AppInner() {
     updateUXPrefs({ sidebarCollapsed: !sidebarCollapsed })
   }, [sidebarCollapsed, updateUXPrefs])
 
-  const highPriorityCount = strategies.filter(s => s.priority === 'critical' || s.priority === 'high').length
+  const highPriorityCount = state.strategies.filter((s: any) => s.priority === 'critical' || s.priority === 'high').length
 
   const renderView = useCallback(() => {
     switch (activeView) {
@@ -177,7 +177,7 @@ function AppInner() {
       case 'calendar': return <TaxCalendar />
       case 'documents': return <DocumentCenter />
       case 'import': return <DataImport />
-      case 'receipt-scan': return <ReceiptIntake />
+      case 'document-scan': return <DocumentIntake />
       case 'workflows': return <Workflows onNavigate={setActiveView} />
       // v6
       case 'optimizer': return <EntityOptimizer />

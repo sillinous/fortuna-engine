@@ -2,47 +2,64 @@ import { sendAIMessage, type ProviderId } from './ai-providers'
 import { processBatch, type BatchProcessingResult } from './batch-intake'
 import { genId, type FortunaState } from '../hooks/useFortuna'
 
-export interface VisionReceiptResult {
+import { type DocumentType, type DocumentRecord, type ReceiptItem } from './storage'
+
+export interface VisionDocumentResult {
     success: boolean
-    receipt?: any // Parsed receipt record
+    document?: DocumentRecord
+    receiptItems?: ReceiptItem[] // Included if documentType === 'receipt'
     error?: string
     confidence: number
 }
 
 // Ensure the prompt guides the AI to output strictly structured JSON
+// Pass 1: We combine categorization and extraction in a single prompt for latency/cost efficiency.
 const VISION_SYSTEM_PROMPT = `You are a financial data extraction AI.
-The user will provide an image of a receipt.
-Extract the data and respond ONLY with a JSON object matching this schema:
+The user will provide an image of a document.
+Auto-classify the document into ONE of these types: "receipt", "invoice", "tax_notice", "contract", "identity", or "other".
+Extract the relevant data and respond ONLY with a JSON object matching this schema:
 {
-  "merchantName": "string",
-  "date": "YYYY-MM-DD",
-  "totalAmount": "number format (e.g. 15.40)",
-  "taxAmount": "number or 0",
-  "tipAmount": "number or 0",
-  "lineItems": [
-    {
-      "description": "string",
-      "amount": "number",
-      "category": "string (best guess business category, e.g. Meals, Supplies, Travel)"
-    }
-  ],
-  "confidenceScore": "number between 0 and 1"
+  "documentType": "receipt|invoice|tax_notice|contract|identity|other",
+  "documentDate": "YYYY-MM-DD",
+  "summary": "Brief 1-sentence summary of the document",
+  "confidenceScore": "number between 0 and 1",
+  "metadata": {
+     // IF documentType === 'receipt' OR 'invoice':
+     "merchantName": "string",
+     "totalAmount": "number",
+     "taxAmount": "number or 0",
+     "tipAmount": "number or 0",
+     "lineItems": [
+       { "description": "string", "amount": "number", "category": "best guess business category" }
+     ],
+
+     // IF documentType === 'tax_notice':
+     "agency": "string (e.g., IRS, State Dept of Revenue)",
+     "noticeNumber": "string",
+     "taxYear": "string",
+     "amountDue": "number",
+     "actionRequired": "boolean",
+
+     // IF documentType === 'contract' OR 'other':
+     "keyParties": ["string"],
+     "subject": "string"
+  }
 }
 Do not include any conversational text or markdown formatting outside of the JSON block.`
 
-export async function processReceiptImage(
+export async function processDocumentImage(
     base64Image: string,
     state: FortunaState,
     provider: ProviderId = 'openrouter',
     model: string = 'google/gemini-2.0-flash-001' // Defaulting to a strong vision model
-): Promise<VisionReceiptResult> {
+): Promise<VisionDocumentResult> {
     try {
         const response = await sendAIMessage(
             [
                 { 
                     role: 'user', 
                     content: [
-                        { type: 'text', text: 'Extract the receipt details from this image.' },
+                        { type: 'text', text: 'Extract the document details from this image.' },
                         { type: 'image_url', image_url: { url: base64Image } }
                     ]
                 }
@@ -64,18 +81,25 @@ export async function processReceiptImage(
 
         const data = JSON.parse(jsonMatch[0])
         
-        // Convert to Fortuna ReceiptRecord format
-        const receiptRecord = {
-            id: genId(),
-            date: data.date || new Date().toISOString().split('T')[0],
-            merchantName: data.merchantName || 'Unknown Vendor',
-            totalAmount: Number(data.totalAmount) || 0,
-            taxAmount: Number(data.taxAmount) || 0,
-            tip: Number(data.tipAmount) || 0,
-            status: 'needs_review', // Default to review for safety
-            category: 'Uncategorized', // Let the heuristic/AI bridge handle final categorization
-            batchId: 'mobile-capture-session', // Temporary batch ID
-            items: (data.lineItems || []).map((item: any) => ({
+        // Convert to Fortuna DocumentRecord format
+        const docId = genId()
+        const documentType = (data.documentType as DocumentType) || 'other'
+        const isReceiptLike = documentType === 'receipt' || documentType === 'invoice'
+
+        const documentRecord: DocumentRecord = {
+            id: docId,
+            documentType,
+            dateAdded: new Date().toISOString(),
+            sourceFile: base64Image.substring(0, 50) + '...[truncated]', // We don't want to store full base64 in local state typically, but for this demo workflow, we handle it upstream
+            summary: data.summary || 'Unclassified Document',
+            status: 'needs_review',
+            metadata: data.metadata || {}
+        }
+
+        // If it's a receipt/invoice, construct the line items array that `BatchProcessor` expects
+        let receiptItems: ReceiptItem[] | undefined = undefined;
+        if (isReceiptLike && data.metadata && Array.isArray(data.metadata.lineItems)) {
+            receiptItems = data.metadata.lineItems.map((item: any) => ({
                 id: genId(),
                 description: item.description || 'Item',
                 amount: Number(item.amount) || 0,
@@ -86,7 +110,8 @@ export async function processReceiptImage(
 
         return {
             success: true,
-            receipt: receiptRecord,
+            document: documentRecord,
+            receiptItems,
             confidence: Number(data.confidenceScore) || 0.5
         }
 
@@ -94,7 +119,7 @@ export async function processReceiptImage(
         console.error("Vision Processing Error:", error)
         return {
             success: false,
-            error: error.message || "Failed to process receipt image.",
+            error: error.message || "Failed to process document image.",
             confidence: 0
         }
     }

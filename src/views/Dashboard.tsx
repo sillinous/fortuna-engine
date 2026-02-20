@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useFortuna } from '../hooks/useFortuna'
 import { evaluateScenario, generateSmartScenarios } from '../engine/scenario-modeler'
 import type { ViewKey } from '../App'
@@ -576,7 +576,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }} className="stagger-fast">
           {[
             { key: 'scenarios', label: 'Scenarios', sub: 'What-if modeler', icon: <BarChart3 size={18} />, color: 'var(--accent-gold)' },
-            { key: 'taxdocs', label: 'Tax Docs', sub: '1040-ES · Schedule C', icon: <FileText size={18} />, color: 'var(--accent-blue)' },
+            { key: 'document-scan', label: 'Scanner', sub: 'Multi-doc intake', icon: <FileText size={18} />, color: 'var(--accent-blue)' },
             { key: 'audit', label: 'Audit Profiler', sub: 'IRS DIF scoring', icon: <Shield size={18} />, color: 'var(--accent-red)' },
             { key: 'optimizer', label: 'Entity Optimizer', sub: 'Structure arbitrage', icon: <Building2 size={18} />, color: 'var(--accent-purple)' },
             { key: 'advisor', label: 'AI Advisor', sub: 'Full-context AI', icon: <Brain size={18} />, color: 'var(--accent-emerald)' },

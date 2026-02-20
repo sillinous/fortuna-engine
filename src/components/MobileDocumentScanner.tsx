@@ -5,8 +5,6 @@ import { useFortuna } from '../hooks/useFortuna'
 interface MobileReceiptScannerProps {
     onCapture: (imageData: string) => void
     onClose: () => void
-}
-
 export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScannerProps) {
     const videoRef = useRef<HTMLVideoElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -117,7 +115,7 @@ export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScanne
                 // --- AR Edge Detection Overlay ---
                 // We're doing a highly-simplified placeholder heuristic here: 
                 // In production, we'd use a Canny edge detector or contour finding algo.
-                // For now, if it's steady, we tighten a green border to pretend we found the receipt.
+                // For now, if it's steady, we tighten a green border to pretend we found the document.
 
                 overlayCtx.clearRect(0, 0, overlay!.width, overlay!.height)
 
@@ -126,7 +124,7 @@ export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScanne
 
                 if (diff < DIFFERENCE_THRESHOLD) {
                     steadyFrames.current++
-                    // Animate the box zooming in to lock onto the receipt
+                    // Animate the box zooming in to lock onto the document
                     boxScale = Math.max(0.6, 0.9 - (steadyFrames.current * 0.05))
 
                     if (steadyFrames.current >= STEADY_THRESHOLD) {
@@ -247,7 +245,7 @@ export function MobileReceiptScanner({ onCapture, onClose }: MobileReceiptScanne
                             ? "Captured!"
                             : steadyFrames.current > 2
                                 ? "Hold steady..."
-                                : "Align receipt within frame"}
+                                : "Align document within frame"}
                     </div>
                 </div>
             </div>

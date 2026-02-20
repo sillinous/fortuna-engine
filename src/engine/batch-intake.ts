@@ -4,33 +4,40 @@ import { processReceiptsAsync } from './receipt-engine'
 
 export interface BatchProcessingResult {
     batchId: string
-    receiptsProcessed: number
+    itemsProcessed: number
     duplicatesFound: number
     errors: string[]
 }
 
+export interface BatchIntakeJob {
+    id: string;
+    type: 'vendor_sync' | 'bulk_upload' | 'mobile_scan';
+    status: 'pending' | 'processing' | 'completed' | 'failed';
+    sourceName: string;
+    dateCreated: string;
+    progress: number;
+}
+
 /**
- * Advanced Batch Receipt Intake Engine
+ * Advanced Batch Document Intake Engine
  * Handles bulk ingestion with concurrency control and global deduplication.
  */
 
-export async function createBatch(state: FortunaState, name: string, receiptData: any[]): Promise<IntakeBatch> {
-    const batch: IntakeBatch = {
+export function createBatch(name: string, totalCount: number = 0): IntakeBatch {
+    return {
         id: genId(),
         name,
         dateStarted: new Date().toISOString(),
         status: 'uploading',
-        totalCount: receiptData.length,
+        totalCount,
         successCount: 0,
         errorCount: 0,
         receiptIds: [],
+        documentIds: [],
         progress: 0,
         entityId: 'personal', // Default attribution
         taxYear: new Date().getFullYear()
     }
-
-    state.intakeBatches.push(batch)
-    return batch
 }
 
 export async function processBatch(
@@ -45,39 +52,55 @@ export async function processBatch(
     batch.status = 'processing'
     const result: BatchProcessingResult = {
         batchId,
-        receiptsProcessed: 0,
+        itemsProcessed: 0,
         duplicatesFound: 0,
         errors: []
     }
 
-    // For this demonstration, we'll process existing "raw" receipts in the state flagged with this batchId
-    const pendingReceipts = state.receipts.filter(r => r.batchId === batchId && (r.status === 'scanned' || r.status === 'processing'))
+    // Process Receipts
+    const pendingReceipts = state.receipts.filter(r => r.batchId === batchId && (r.status === 'scanned' || r.status === 'processing' || r.status === 'needs_review'))
 
-    for (let i = 0; i < pendingReceipts.length; i++) {
-        const receipt = pendingReceipts[i]
+    // Process general Documents
+    const pendingDocuments = state.documents.filter(d => d.batchId === batchId && (d.status === 'pending' || d.status === 'needs_review'))
 
+    const totalToProcess = pendingReceipts.length + pendingDocuments.length
+    let count = 0
+
+    // 1. Process Receipts
+    for (const receipt of pendingReceipts) {
         try {
-            // 1. Check for duplicates against global history
             if (isDuplicate(receipt, state.receipts)) {
                 receipt.status = 'needs_review'
                 result.duplicatesFound++
                 batch.errorCount++
             } else {
-                // 2. Perform intelligent itemization/routing (Heuristic)
                 receipt.status = 'processing'
-
-                // Simulate async OCR delay
-                await new Promise(resolve => setTimeout(resolve, 100))
-
-                result.receiptsProcessed++
+                await new Promise(resolve => setTimeout(resolve, 50)) // Artificial delay
+                result.itemsProcessed++
                 batch.successCount++
             }
         } catch (err: any) {
-            result.errors.push(`Error processing ${receipt.id}: ${err.message}`)
+            result.errors.push(`Error processing receipt ${receipt.id}: ${err.message}`)
             batch.errorCount++
         }
+        count++
+        batch.progress = Math.round((count / (totalToProcess || 1)) * 100)
+        onProgress?.(batch.progress)
+    }
 
-        batch.progress = Math.round(((i + 1) / pendingReceipts.length) * 100)
+    // 2. Process General Documents
+    for (const doc of pendingDocuments) {
+        try {
+            // General document logic (e.g., integrity check, preliminary classification)
+            doc.status = 'processed'
+            result.itemsProcessed++
+            batch.successCount++
+        } catch (err: any) {
+            result.errors.push(`Error processing document ${doc.id}: ${err.message}`)
+            batch.errorCount++
+        }
+        count++
+        batch.progress = Math.round((count / (totalToProcess || 1)) * 100)
         onProgress?.(batch.progress)
     }
 
@@ -87,11 +110,15 @@ export async function processBatch(
         await processReceiptsAsync(state, batchId)
 
         // Finalize counts based on AI success
-        // Subtract from error count if AI fixed it
-        batch.successCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'allocated').length
-        batch.errorCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'needs_review').length
+        batch.successCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'allocated').length +
+            state.documents.filter(d => d.batchId === batchId && d.status === 'processed').length
+
+        batch.errorCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'needs_review').length +
+            state.documents.filter(d => d.batchId === batchId && d.status === 'needs_review').length
     }
 
+    batch.progress = 100
+    onProgress?.(100)
     batch.status = 'completed'
     batch.dateCompleted = new Date().toISOString()
 

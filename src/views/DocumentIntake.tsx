@@ -1,18 +1,18 @@
 import React, { useState } from 'react'
-import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle } from 'lucide-react'
+import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
-import { MobileReceiptScanner } from '../components/MobileReceiptScanner'
-import { processReceiptImage } from '../engine/vision-processor'
-import { createBatch, processBatch, type BatchIntakeJob } from '../engine/batch-intake'
-import type { ReceiptRecord } from '../types'
+import { MobileDocumentScanner } from '../components/MobileDocumentScanner'
+import { processDocumentImage } from '../engine/vision-processor'
+import { createBatch, processBatch } from '../engine/batch-intake'
+import { type IntakeBatch, type DocumentRecord, type ReceiptRecord } from '../engine/storage'
 
 type IntakeStage = 'idle' | 'scanning' | 'processing' | 'review' | 'done'
 
-export function ReceiptIntake() {
+export function DocumentIntake() {
     const { state, updateState } = useFortuna()
     const [stage, setStage] = useState<IntakeStage>('idle')
-    const [scannedReceipts, setScannedReceipts] = useState<ReceiptRecord[]>([])
-    const [currentBatch, setCurrentBatch] = useState<BatchIntakeJob | null>(null)
+    const [scannedDocuments, setScannedDocuments] = useState<DocumentRecord[]>([])
+    const [currentBatch, setCurrentBatch] = useState<IntakeBatch | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [processingMessage, setProcessingMessage] = useState('Extracting receipt details...')
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
@@ -29,28 +29,66 @@ export function ReceiptIntake() {
 
         try {
             // 1. Process via Vision AI
-            const visionResult = await processReceiptImage(base64Image, state)
+            const visionResult = await processDocumentImage(base64Image, state)
 
-            if (!visionResult.success || !visionResult.receipt) {
-                throw new Error(visionResult.error || "Failed to extract receipt data.")
+            if (!visionResult.success || !visionResult.document) {
+                throw new Error(visionResult.error || "Failed to extract document data.")
             }
 
-            const newReceipt = visionResult.receipt
+            const newDocument = visionResult.document
 
-            // 2. Initialize or retrieve batch (need functional state update to avoid race conditions with concurrent scans)
-            setCurrentBatch(prevBatch => {
-                let activeBatch = prevBatch
-                if (!activeBatch) {
-                    activeBatch = createBatch('mobile_scan', 'Mobile Scan Session')
-                    updateState(s => ({ ...s, batchJobs: [...s.batchJobs, activeBatch!] }))
-                }
-                newReceipt.batchId = activeBatch.id
-                return activeBatch
-            })
+            // 2. Initialize or retrieve batch 
+            let activeBatchId: string = ''
+            if (!currentBatch) {
+                const newBatch = createBatch('Mobile Scan Session')
+                activeBatchId = newBatch.id
+                updateState(s => ({ ...s, intakeBatches: [...s.intakeBatches, newBatch] }))
+                setCurrentBatch(newBatch)
+            } else {
+                activeBatchId = currentBatch.id
+            }
+
+            // Link to batch
+            // NOTE: Batch tracking for generic documents requires meta-model update.
+            // For now, attaching loosely via metadata or letting the UI stage handle bulk commit.
 
             // Update local state
-            setScannedReceipts(prev => [...prev, newReceipt])
-            updateState(s => ({ ...s, receipts: [...s.receipts, newReceipt] }))
+            setScannedDocuments(prev => [...prev, newDocument])
+
+            // Push to respective arrays in global state based on classification
+            updateState(s => {
+                const draftState = { ...s }
+                draftState.documents = [...draftState.documents, newDocument]
+
+                // If the vision processor also returned receipt line items, bridge it into the receipts array
+                if (visionResult.receiptItems) {
+                    const receiptRecord: ReceiptRecord = {
+                        id: newDocument.id, // share ID for easy linking
+                        date: newDocument.metadata.documentDate || new Date().toISOString().split('T')[0],
+                        merchantName: newDocument.metadata.merchantName || 'Unknown Vendor',
+                        totalAmount: Number(newDocument.metadata.totalAmount) || 0,
+                        taxAmount: Number(newDocument.metadata.taxAmount) || 0,
+                        tipAmount: Number(newDocument.metadata.tipAmount) || 0,
+                        status: 'needs_review' as const,
+                        batchId: activeBatchId,
+                        items: visionResult.receiptItems
+                    }
+                    draftState.receipts = [...draftState.receipts, receiptRecord]
+                }
+
+                // Also update the batch counts
+                const batch = draftState.intakeBatches.find((b: IntakeBatch) => b.id === activeBatchId)
+                if (batch) {
+                    batch.totalCount = (batch.totalCount || 0) + 1
+                    if (newDocument.documentType === 'receipt') {
+                        batch.receiptIds = [...(batch.receiptIds || []), newDocument.id]
+                    } else {
+                        batch.documentIds = [...(batch.documentIds || []), newDocument.id]
+                    }
+                }
+
+                return draftState
+            })
 
         } catch (err: any) {
             console.error(err)
@@ -62,10 +100,10 @@ export function ReceiptIntake() {
     }
 
     const handleProcessBatch = async () => {
-        if (!currentBatch || scannedReceipts.length === 0) return
+        if (!currentBatch || scannedDocuments.length === 0) return
 
         setStage('processing')
-        setProcessingMessage('Applying tax rules & entity assignment...')
+        setProcessingMessage('Applying routing rules & entity assignment...')
 
         try {
             // 3. Run the heuristics and AI fallback across the collected batch
@@ -85,7 +123,7 @@ export function ReceiptIntake() {
 
     const resetSession = () => {
         setStage('idle')
-        setScannedReceipts([])
+        setScannedDocuments([])
         setCurrentBatch(null)
         setError(null)
     }
@@ -102,7 +140,7 @@ export function ReceiptIntake() {
                         </h1>
                     </div>
                     <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: 0 }}>
-                        Auto-capture receipts with your camera to extract data and categorize expenses.
+                        Auto-capture documents with your camera to extract data and categorize records.
                     </p>
                 </div>
 
@@ -136,7 +174,7 @@ export function ReceiptIntake() {
                         Ready to scan
                     </div>
                     <div style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 24, textAlign: 'center' }}>
-                        Ensure good lighting and hold the camera steady over the receipt. The system will automatically capture when the image is stable.
+                        Ensure good lighting and hold the camera steady over the document. The system will automatically capture when the image is stable.
                     </div>
                     <button onClick={handleStartScanning} style={styles.primaryButtonLarge}>
                         <Camera size={20} /> Launch Scanner
@@ -146,9 +184,9 @@ export function ReceiptIntake() {
 
             {/* Stage: Scanning (Fullscreen Overlay) */}
             {stage === 'scanning' && (
-                <MobileReceiptScanner
+                <MobileDocumentScanner
                     onCapture={handleImageCapture}
-                    onClose={() => setStage(scannedReceipts.length > 0 ? 'review' : 'idle')}
+                    onClose={() => setStage(scannedDocuments.length > 0 ? 'review' : 'idle')}
                 />
             )}
 
@@ -172,7 +210,7 @@ export function ReceiptIntake() {
                     <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                         <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>
-                            Scanned Items ({scannedReceipts.length})
+                            Scanned Documents ({scannedDocuments.length})
                         </div>
                         <button onClick={handleStartScanning} style={styles.secondaryButton}>
                             <Camera size={16} /> Scan More
@@ -180,19 +218,22 @@ export function ReceiptIntake() {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 32 }}>
-                        {scannedReceipts.map(receipt => (
-                            <div key={receipt.id} style={styles.receiptRow}>
+                        {scannedDocuments.map(doc => (
+                            <div key={doc.id} style={styles.receiptRow}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                                    <div style={styles.receiptIcon}>
-                                        <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} />
+                                    <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : 'rgba(59,130,246,0.06)' }}>
+                                        {doc.documentType === 'receipt' ? <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} /> : <FileText size={18} style={{ color: '#3b82f6' }} />}
                                     </div>
                                     <div>
-                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{receipt.merchantName}</div>
-                                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{receipt.date} • {receipt.items.length} items</div>
+                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                                            {doc.documentType} • {doc.metadata.merchantName || doc.metadata.agency || doc.metadata.subject || 'Document'}
+                                        </div>
+                                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(doc.dateAdded).toLocaleDateString()}</div>
                                     </div>
                                 </div>
                                 <div style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    ${receipt.totalAmount.toFixed(2)}
+                                    {doc.metadata.totalAmount ? `$${Number(doc.metadata.totalAmount).toFixed(2)}` : ''}
+                                    {doc.metadata.amountDue ? `$${Number(doc.metadata.amountDue).toFixed(2)}` : ''}
                                 </div>
                             </div>
                         ))}
@@ -227,7 +268,7 @@ export function ReceiptIntake() {
                         Intake Complete
                     </div>
                     <div style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 24, textAlign: 'center' }}>
-                        {scannedReceipts.length} receipts have been processed, routed to entities, and pushed to the ledger.
+                        {scannedDocuments.length} documents have been processed, routed to entities, and pushed to the ledger.
                     </div>
                     <button onClick={resetSession} style={styles.secondaryButton}>
                         Start New Batch
@@ -276,9 +317,8 @@ const styles: Record<string, React.CSSProperties> = {
         padding: '16px 20px', borderRadius: 12,
         background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
     },
-    receiptIcon: {
+    docIcon: {
         width: 40, height: 40, borderRadius: 10,
-        background: 'rgba(239,68,68,0.06)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
     }
 }
