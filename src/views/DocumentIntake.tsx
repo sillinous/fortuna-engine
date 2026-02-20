@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
-import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText } from 'lucide-react'
+import React, { useState, useMemo } from 'react'
+import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText, Ban } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 import { MobileDocumentScanner } from '../components/MobileDocumentScanner'
 import { processDocumentImage } from '../engine/vision-processor'
 import { createBatch, processBatch } from '../engine/batch-intake'
-import { type IntakeBatch, type DocumentRecord, type ReceiptRecord } from '../engine/storage'
+import { type IntakeBatch, type DocumentRecord, type ReceiptRecord, type FortunaState } from '../engine/storage'
 
 type IntakeStage = 'idle' | 'scanning' | 'processing' | 'review' | 'done'
 
@@ -18,6 +18,45 @@ export function DocumentIntake() {
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
     const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
 
+    const stats = useMemo(() => {
+        const result = {
+            totalCount: scannedDocuments.length,
+            notApplicableCount: 0,
+            notApplicableTotal: 0,
+            categorizedCount: 0,
+            totalAmount: 0,
+            byTypeCount: {} as Record<string, number>,
+            byTypeTotal: {} as Record<string, number>,
+            receipts: [] as { merchant: string; amount: number; items: any[] }[]
+        }
+
+        scannedDocuments.forEach((doc: DocumentRecord) => {
+            const type = doc.documentType
+            const amount = Number(doc.metadata.totalAmount || doc.metadata.amountDue || 0)
+
+            if (type === 'not_applicable') {
+                result.notApplicableCount++
+                result.notApplicableTotal += amount
+            } else {
+                result.categorizedCount++
+                result.totalAmount += amount
+
+                result.byTypeCount[type] = (result.byTypeCount[type] || 0) + 1
+                result.byTypeTotal[type] = (result.byTypeTotal[type] || 0) + amount
+
+                if (type === 'receipt') {
+                    result.receipts.push({
+                        merchant: doc.metadata.merchantName || 'Receipt',
+                        amount,
+                        items: doc.metadata.lineItems || []
+                    })
+                }
+            }
+        })
+
+        return result
+    }, [scannedDocuments])
+
     const handleStartScanning = () => {
         setError(null)
         setStage('scanning')
@@ -25,7 +64,7 @@ export function DocumentIntake() {
 
     const handleImageCapture = async (base64Image: string) => {
         // In Turbo Mode, we stay in 'scanning' stage and process concurrently
-        setBackgroundProcessingCount(prev => prev + 1)
+        setBackgroundProcessingCount((prev: number) => prev + 1)
         setError(null)
 
         try {
@@ -43,7 +82,7 @@ export function DocumentIntake() {
             if (!currentBatch) {
                 const newBatch = createBatch('Mobile Scan Session')
                 activeBatchId = newBatch.id
-                updateState(s => ({ ...s, intakeBatches: [...s.intakeBatches, newBatch] }))
+                updateState((s: FortunaState) => ({ ...s, intakeBatches: [...s.intakeBatches, newBatch] }))
                 setCurrentBatch(newBatch)
             } else {
                 activeBatchId = currentBatch.id
@@ -57,7 +96,7 @@ export function DocumentIntake() {
             setScannedDocuments(prev => [...prev, newDocument])
 
             // Push to respective arrays in global state based on classification
-            updateState(s => {
+            updateState((s: FortunaState) => {
                 const draftState = { ...s }
                 draftState.documents = [...draftState.documents, newDocument]
 
@@ -96,7 +135,7 @@ export function DocumentIntake() {
             // We don't want to throw a fatal error that breaks the scanning flow. Just log or show a passive toast.
             // For now, quietly fail the single scan and let the user re-scan.
         } finally {
-            setBackgroundProcessingCount(prev => prev - 1)
+            setBackgroundProcessingCount((prev: number) => prev - 1)
         }
     }
 
@@ -166,7 +205,7 @@ export function DocumentIntake() {
     }
 
     return (
-        <div style={{ padding: 32, maxWidth: 800, margin: '0 auto', minHeight: 'calc(100vh - 64px)' }}>
+        <div style={{ padding: '20px 16px', maxWidth: 800, margin: '0 auto', minHeight: 'calc(100vh - 64px)' }}>
 
             <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
@@ -264,8 +303,14 @@ export function DocumentIntake() {
                                         style={{ ...styles.receiptRow, cursor: 'pointer', borderBottomLeftRadius: isExpanded ? 0 : 12, borderBottomRightRadius: isExpanded ? 0 : 12 }}
                                     >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                                            <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : 'rgba(59,130,246,0.06)' }}>
-                                                {doc.documentType === 'receipt' ? <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} /> : <FileText size={18} style={{ color: '#3b82f6' }} />}
+                                            <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : doc.documentType === 'not_applicable' ? 'rgba(107,114,128,0.1)' : 'rgba(59,130,246,0.06)' }}>
+                                                {doc.documentType === 'receipt' ? (
+                                                    <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} />
+                                                ) : doc.documentType === 'not_applicable' ? (
+                                                    <Ban size={18} style={{ color: 'var(--text-muted)' }} />
+                                                ) : (
+                                                    <FileText size={18} style={{ color: '#3b82f6' }} />
+                                                )}
                                             </div>
                                             <div>
                                                 <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
@@ -287,13 +332,13 @@ export function DocumentIntake() {
 
                                     {isExpanded && (
                                         <div style={styles.expandedContent}>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 20 }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
                                                 <div style={styles.inputGroup}>
                                                     <label style={styles.label}>Merchant / Name</label>
                                                     <input
                                                         style={styles.input}
                                                         value={doc.metadata.merchantName || doc.metadata.subject || ''}
-                                                        onChange={(e) => handleUpdateDocMetadata(doc.id, doc.documentType === 'receipt' ? 'merchantName' : 'subject', e.target.value)}
+                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateDocMetadata(doc.id, doc.metadata.merchantName ? 'merchantName' : doc.metadata.agency ? 'agency' : 'subject', e.target.value)}
                                                     />
                                                 </div>
                                                 <div style={styles.inputGroup}>
@@ -302,7 +347,7 @@ export function DocumentIntake() {
                                                         style={styles.input}
                                                         type="number"
                                                         value={doc.metadata.totalAmount || doc.metadata.amountDue || 0}
-                                                        onChange={(e) => handleUpdateDocMetadata(doc.id, doc.metadata.totalAmount ? 'totalAmount' : 'amountDue', parseFloat(e.target.value))}
+                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateDocMetadata(doc.id, doc.metadata.totalAmount ? 'totalAmount' : 'amountDue', parseFloat(e.target.value))}
                                                     />
                                                 </div>
                                             </div>
@@ -318,7 +363,7 @@ export function DocumentIntake() {
                                                                 <input
                                                                     style={{ ...styles.inputPlain, flex: 1 }}
                                                                     value={item.description}
-                                                                    onChange={(e) => handleUpdateLineItem(doc.id, item.id, 'description', e.target.value)}
+                                                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateLineItem(doc.id, item.id, 'description', e.target.value)}
                                                                 />
                                                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                                                     <div style={styles.categoryBadge}>
@@ -328,7 +373,7 @@ export function DocumentIntake() {
                                                                         style={{ ...styles.inputPlain, width: 80, textAlign: 'right', fontWeight: 600 }}
                                                                         type="number"
                                                                         value={item.amount}
-                                                                        onChange={(e) => handleUpdateLineItem(doc.id, item.id, 'amount', parseFloat(e.target.value))}
+                                                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateLineItem(doc.id, item.id, 'amount', parseFloat(e.target.value))}
                                                                     />
                                                                 </div>
                                                             </div>
@@ -343,7 +388,7 @@ export function DocumentIntake() {
                         })}
                     </div>
 
-                    <div style={{ display: 'flex', gap: 16, borderTop: '1px solid var(--border-subtle)', paddingTop: 24 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 24 }}>
                         <button onClick={resetSession} style={{ ...styles.secondaryButton, flex: 1, padding: 16 }}>
                             <RefreshCw size={18} /> Discard Batch
                         </button>
@@ -364,18 +409,69 @@ export function DocumentIntake() {
 
             {/* Stage: Done */}
             {stage === 'done' && (
-                <div style={styles.card}>
-                    <div style={{ ...styles.iconCircle, background: 'rgba(16,185,129,0.15)' }}>
-                        <Check size={40} style={{ color: 'var(--accent-emerald)' }} />
+                <div style={{ ...styles.card, maxWidth: 600, width: '100%', margin: '0 auto', padding: '32px 24px' }}>
+                    <div style={styles.successIcon}>
+                        <Check size={32} color="#000" />
                     </div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
-                        Intake Complete
+                    <h2 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8, textAlign: 'center' }}>
+                        Processing Complete
+                    </h2>
+                    <p style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 32, textAlign: 'center' }}>
+                        {stats.categorizedCount} documents processed and {stats.notApplicableCount} marked as not applicable.
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginBottom: 32 }}>
+                        {/* Summary Totals */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)' }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Categorized</div>
+                                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-gold)' }}>${stats.totalAmount.toFixed(2)}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{stats.categorizedCount} items</div>
+                            </div>
+                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)' }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Not Applicable</div>
+                                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-secondary)' }}>${stats.notApplicableTotal.toFixed(2)}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{stats.notApplicableCount} items</div>
+                            </div>
+                        </div>
+
+                        {/* Breakdown per Type */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Breakdown by Type</div>
+                            {Object.entries(stats.byTypeCount).map(([type, count]) => (
+                                <div key={type} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'rgba(0,0,0,0.2)', borderRadius: 10 }}>
+                                    <div style={{ textTransform: 'capitalize', fontSize: 14, fontWeight: 500 }}>{type} ({count})</div>
+                                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>${stats.byTypeTotal[type].toFixed(2)}</div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Line Items for Receipts */}
+                        {stats.receipts.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Receipt Details</div>
+                                {stats.receipts.map((r, i) => (
+                                    <div key={i} style={{ border: '1px solid var(--border-subtle)', borderRadius: 10, overflow: 'hidden' }}>
+                                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between' }}>
+                                            <span style={{ fontWeight: 600 }}>{r.merchant}</span>
+                                            <span style={{ color: 'var(--accent-gold)' }}>${r.amount.toFixed(2)}</span>
+                                        </div>
+                                        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            {r.items.map((item: any, j: number) => (
+                                                <div key={j} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                                                    <span style={{ color: 'var(--text-secondary)' }}>{item.description}</span>
+                                                    <span style={{ color: 'var(--text-muted)' }}>${Number(item.amount).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
-                    <div style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 24, textAlign: 'center' }}>
-                        {scannedDocuments.length} documents have been processed, routed to entities, and pushed to the ledger.
-                    </div>
-                    <button onClick={resetSession} style={styles.secondaryButton}>
-                        Start New Batch
+
+                    <button onClick={resetSession} style={{ ...styles.primaryButtonLarge, width: '100%' }}>
+                        Start New Batch <ArrowRight size={18} />
                     </button>
                 </div>
             )}
@@ -389,11 +485,17 @@ const styles: Record<string, React.CSSProperties> = {
         background: 'var(--bg-elevated)',
         borderRadius: 16,
         border: '1px solid var(--border-subtle)',
-        padding: 48,
+        padding: '32px 24px',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    successIcon: {
+        width: 64, height: 64, borderRadius: '50%',
+        background: 'var(--accent-gold)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        marginBottom: 20,
     },
     iconCircle: {
         width: 80, height: 80, borderRadius: '50%',

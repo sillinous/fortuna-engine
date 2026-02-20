@@ -439,7 +439,7 @@ export interface DeductionRecord {
   receiptId?: string
 }
 
-export type DocumentType = 'receipt' | 'invoice' | 'tax_notice' | 'contract' | 'identity' | 'other'
+export type DocumentType = 'receipt' | 'invoice' | 'tax_notice' | 'contract' | 'identity' | 'other' | 'not_applicable'
 
 export interface DocumentRecord {
   id: string

@@ -1,8 +1,5 @@
 import { sendAIMessage, type ProviderId } from './ai-providers'
-import { processBatch, type BatchProcessingResult } from './batch-intake'
-import { genId, type FortunaState } from '../hooks/useFortuna'
-
-import { type DocumentType, type DocumentRecord, type ReceiptItem } from './storage'
+import { type DocumentType, type DocumentRecord, type ReceiptItem, genId } from './storage'
 
 export interface VisionDocumentResult {
     success: boolean
@@ -16,10 +13,10 @@ export interface VisionDocumentResult {
 // Pass 1: We combine categorization and extraction in a single prompt for latency/cost efficiency.
 const VISION_SYSTEM_PROMPT = `You are a financial data extraction AI.
 The user will provide an image of a document.
-Auto-classify the document into ONE of these types: "receipt", "invoice", "tax_notice", "contract", "identity", or "other".
+Auto-classify the document into ONE of these types: "receipt", "invoice", "tax_notice", "contract", "identity", or "not_applicable" (for blurry/irrelevant images).
 Extract the relevant data and respond ONLY with a JSON object matching this schema:
 {
-  "documentType": "receipt|invoice|tax_notice|contract|identity|other",
+  "documentType": "receipt|invoice|tax_notice|contract|identity|not_applicable",
   "documentDate": "YYYY-MM-DD",
   "summary": "Brief 1-sentence summary of the document",
   "confidenceScore": "number between 0 and 1",
@@ -49,7 +46,6 @@ Do not include any conversational text or markdown formatting outside of the JSO
 
 export async function processDocumentImage(
     base64Image: string,
-    state: FortunaState,
     provider: ProviderId = 'openrouter',
     model: string = 'google/gemini-2.0-flash-001' // Defaulting to a strong vision model
 ): Promise<VisionDocumentResult> {
