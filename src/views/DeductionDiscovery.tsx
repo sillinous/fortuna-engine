@@ -128,6 +128,11 @@ function DeductionCard({ ded, expanded, onToggle }: { ded: DiscoveredDeduction; 
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{ded.name}</span>
             {ded.alreadyClaimed && <span className="badge emerald" style={{ fontSize: 9 }}>Captured</span>}
             <span className="badge muted" style={{ fontSize: 9 }}>{ded.confidence} confidence</span>
+            {ded.deductionSignals && ded.deductionSignals.length > 0 && (
+              <span className="badge gold" style={{ fontSize: 9, background: 'var(--accent-gold-dim)', color: 'var(--accent-gold)', border: '1px solid var(--accent-gold)22' }}>
+                <Shield size={8} style={{ marginRight: 3 }} /> Evidence Found
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{ded.eligibility}</div>
         </div>

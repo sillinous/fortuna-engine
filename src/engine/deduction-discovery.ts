@@ -18,12 +18,28 @@ export interface DiscoveredDeduction {
   requirements: string[]
   applies: boolean
   alreadyClaimed: boolean
+  deductionSignals?: string[]
 }
 
 export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
-  const { profile, incomeStreams, deductions, entities, expenses } = state
+  const { profile, incomeStreams, deductions, entities, expenses, documents } = state
   const report = generateTaxReport(state)
   const discoveries: DiscoveredDeduction[] = []
+
+  // Extract all intelligence signals from scanned documents
+  const signalsByCategory: Record<string, string[]> = {}
+
+  if (documents) {
+    documents.forEach(doc => {
+      if (doc.metadata.deductionSignals) {
+        const cat = doc.metadata.expenseCategory || doc.documentType
+        if (cat) {
+          if (!signalsByCategory[cat]) signalsByCategory[cat] = []
+          signalsByCategory[cat].push(...doc.metadata.deductionSignals)
+        }
+      }
+    })
+  }
 
   const hasSEIncome = incomeStreams.some(s => ['business', 'freelance'].includes(s.type) && s.isActive && s.annualAmount > 0)
   const seIncome = incomeStreams.filter(s => ['business', 'freelance'].includes(s.type) && s.isActive).reduce((s, i) => s + i.annualAmount, 0)
@@ -31,8 +47,8 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
   const w2Income = incomeStreams.filter(s => s.type === 'w2' && s.isActive).reduce((s, i) => s + i.annualAmount, 0)
   const totalIncome = report.grossIncome
   const hasRental = incomeStreams.some(s => s.type === 'rental' && s.isActive)
-  const claimedCategories = new Set(deductions.map(d => d.category))
-  const claimedNames = new Set(deductions.map(d => d.name.toLowerCase()))
+  const claimedCategories = new Set(deductions.map(d => d.categoryId))
+  const claimedDescriptions = new Set(deductions.map(d => d.description.toLowerCase()))
   const hasEntity = entities.some(e => e.isActive)
   const marginalRate = report.marginalRate
 
@@ -45,7 +61,8 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
       eligibility: 'Self-employed individuals who pay their own health insurance premiums',
       howToClaim: 'Deduct premiums on Form 1040 Line 17 (above-the-line)',
       requirements: ['Must have SE net income', 'Cannot be eligible for employer-sponsored plan', 'Premiums ≤ net SE income'],
-      applies: true, alreadyClaimed: claimedNames.has('health insurance') || claimedCategories.has('health'),
+      applies: true, alreadyClaimed: claimedDescriptions.has('health insurance') || claimedCategories.has('health'),
+      deductionSignals: signalsByCategory['health']
     })
   }
 
@@ -61,6 +78,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
       howToClaim: 'Simplified method: $5/sqft up to 300 sqft ($1,500). Or actual expenses method (Form 8829).',
       requirements: ['Exclusive and regular business use', 'Principal place of business', 'Not available for W-2 employees'],
       applies: hasSEIncome, alreadyClaimed: hasHomeOffice,
+      deductionSignals: signalsByCategory['home_office']
     })
   }
 
@@ -78,13 +96,14 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
       howToClaim: 'Standard mileage rate ($0.70/mile for 2025) or actual expenses. Track mileage log.',
       requirements: ['Business-use miles documented', 'Mileage log maintained', 'Cannot use both methods for same vehicle'],
       applies: hasSEIncome, alreadyClaimed: hasMileage,
+      deductionSignals: signalsByCategory['vehicle']
     })
   }
 
   // ─── SEP-IRA / Solo 401(k) ────────────────────────────────────────
   if (hasSEIncome && seIncome > 10000) {
     const hasRetirement = claimedCategories.has('retirement')
-    const currentRetirement = deductions.filter(d => d.category === 'retirement').reduce((s, d) => s + d.amount, 0)
+    const currentRetirement = deductions.filter(d => d.categoryId === 'retirement').reduce((s, d) => s + d.amount, 0)
     const maxSEP = Math.min(69000, Math.round(seIncome * 0.25))
     const gap = Math.max(0, maxSEP - currentRetirement)
     if (gap > 2000) {
@@ -96,6 +115,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Contribute to SEP-IRA (up to 25% of net SE income, max $69,000) or Solo 401(k) with employee + employer contributions.',
         requirements: ['Must have net SE income', 'SEP-IRA: contribute by tax filing deadline', 'Solo 401(k): establish by Dec 31'],
         applies: true, alreadyClaimed: hasRetirement && gap < 2000,
+        deductionSignals: signalsByCategory['retirement']
       })
     }
   }
@@ -115,6 +135,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Increase 401(k) contribution rate through employer payroll. Reduces taxable income dollar-for-dollar.',
         requirements: ['Employer offers 401(k) plan', 'Increase contribution through HR/payroll'],
         applies: true, alreadyClaimed: gap < 1000,
+        deductionSignals: signalsByCategory['retirement']
       })
     }
   }
@@ -136,6 +157,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Contribute through payroll (avoids FICA) or directly to HSA account (deduct on 1040).',
         requirements: ['Enrolled in high-deductible health plan (HDHP)', 'Not enrolled in Medicare', 'Cannot be claimed as dependent'],
         applies: profile.hasHealthInsurance, alreadyClaimed: gap < 500,
+        deductionSignals: signalsByCategory['health']
       })
     }
   }
@@ -151,6 +173,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
       howToClaim: 'Claimed automatically on Form 8995. Ensure business income qualifies.',
       requirements: ['Pass-through entity or sole prop', 'Below income thresholds or in qualified trade', 'Not specified service business above threshold'],
       applies: true, alreadyClaimed: report.qbiDeduction > 0,
+      deductionSignals: signalsByCategory['business']
     })
   }
 
@@ -185,7 +208,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
 
   // ─── Student Loan Interest ─────────────────────────────────────────
   if (totalIncome < 90000 || (profile.filingStatus === 'married_joint' && totalIncome < 185000)) {
-    const hasStudentLoan = claimedNames.has('student loan interest') || claimedNames.has('student loan')
+    const hasStudentLoan = claimedDescriptions.has('student loan interest') || claimedDescriptions.has('student loan')
     if (!hasStudentLoan) {
       discoveries.push({
         id: 'student-loan', name: 'Student Loan Interest Deduction',
@@ -195,6 +218,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Report on Form 1040 Schedule 1 Line 21. Lender sends 1098-E.',
         requirements: ['Legally obligated to pay interest', 'Loan for qualified education expenses', 'Income below phase-out'],
         applies: true, alreadyClaimed: hasStudentLoan,
+        deductionSignals: signalsByCategory['education']
       })
     }
   }
@@ -212,6 +236,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Schedule A (itemized deductions). Cash donations: up to 60% of AGI. Non-cash: up to 30%.',
         requirements: ['Donations to qualified 501(c)(3) organizations', 'Written acknowledgment for donations > $250', 'Non-cash items at fair market value'],
         applies: true, alreadyClaimed: hasCharitable,
+        deductionSignals: signalsByCategory['charitable']
       })
     }
   }
@@ -241,6 +266,7 @@ export function discoverDeductions(state: FortunaState): DiscoveredDeduction[] {
         howToClaim: 'Section 179: up to $1,220,000 (2025). Bonus depreciation: 40% in 2025 (phasing down).',
         requirements: ['Asset used > 50% for business', 'Placed in service during tax year', 'Must have business income for Sec 179'],
         applies: true, alreadyClaimed: hasDepreciation,
+        deductionSignals: signalsByCategory['business']
       })
     }
   }

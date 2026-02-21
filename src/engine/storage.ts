@@ -452,6 +452,7 @@ export interface DocumentRecord {
   status: 'pending' | 'processed' | 'needs_review' | 'rejected'
   summary?: string
   batchId?: string // Link to IntakeBatch
+  thumbnail?: string // low-res base64
 }
 
 // ─── Metamodel v13 Additions ──────────────────────────────────────
@@ -557,6 +558,7 @@ export interface ReceiptRecord extends Attribution {
   paymentMethodId?: string // Link to account/card
   isRecurring?: boolean   // Subscription flag
   batchId?: string        // Link to IntakeBatch
+  thumbnail?: string      // low-res base64
 }
 
 export interface IntakeBatch extends Attribution {

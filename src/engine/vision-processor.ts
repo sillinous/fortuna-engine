@@ -20,6 +20,7 @@ Extract the relevant data and respond ONLY with a JSON object matching this sche
   "documentDate": "YYYY-MM-DD",
   "summary": "Brief 1-sentence summary of the document",
   "confidenceScore": "number between 0 and 1",
+  "deductionSignals": ["list of potential tax deductions found, e.g. home office, vehicle, travel"],
   "metadata": {
      // IF documentType === 'receipt' OR 'invoice':
      "merchantName": "string",
@@ -44,12 +45,34 @@ Extract the relevant data and respond ONLY with a JSON object matching this sche
 }
 Do not include any conversational text or markdown formatting outside of the JSON block.`
 
+/** Generates a low-res thumbnail from base64 image */
+async function createThumbnail(base64: string, maxWidth = 200): Promise<string> {
+    return new Promise((resolve) => {
+        const img = new Image()
+        img.onload = () => {
+            const canvas = document.createElement('canvas')
+            const ratio = img.height / img.width
+            canvas.width = maxWidth
+            canvas.height = maxWidth * ratio
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return resolve(base64.substring(0, 100)) // Fallback if canvas fails
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+            resolve(canvas.toDataURL('image/jpeg', 0.6))
+        }
+        img.onerror = () => resolve('')
+        img.src = base64
+    })
+}
+
 export async function processDocumentImage(
     base64Image: string,
     provider: ProviderId = 'openrouter',
     model: string = 'google/gemini-2.0-flash-001' // Defaulting to a strong vision model
 ): Promise<VisionDocumentResult> {
     try {
+        // Generate thumbnail concurrently
+        const thumbnailPromise = createThumbnail(base64Image)
+
         const response = await sendAIMessage(
             [
                 { 
@@ -69,6 +92,8 @@ export async function processDocumentImage(
             }
         )
 
+        const thumbnail = await thumbnailPromise
+
         // Parse the JSON
         const jsonMatch = response.text.match(/\{[\s\S]*\}/)
         if (!jsonMatch) {
@@ -86,10 +111,14 @@ export async function processDocumentImage(
             id: docId,
             documentType,
             dateAdded: new Date().toISOString(),
-            sourceFile: base64Image.substring(0, 50) + '...[truncated]', // We don't want to store full base64 in local state typically, but for this demo workflow, we handle it upstream
+            sourceFile: base64Image.substring(0, 50) + '...[truncated]', 
             summary: data.summary || 'Unclassified Document',
             status: 'needs_review',
-            metadata: data.metadata || {}
+            metadata: {
+                ...(data.metadata || {}),
+                deductionSignals: data.deductionSignals || []
+            },
+            thumbnail
         }
 
         // If it's a receipt/invoice, construct the line items array that `BatchProcessor` expects

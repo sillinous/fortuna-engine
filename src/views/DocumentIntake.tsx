@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText, Ban } from 'lucide-react'
+import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText, Ban, Shield } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 import { MobileDocumentScanner } from '../components/MobileDocumentScanner'
 import { processDocumentImage } from '../engine/vision-processor'
@@ -305,15 +305,19 @@ export function DocumentIntake() {
                                         style={{ ...styles.receiptRow, cursor: 'pointer', borderBottomLeftRadius: isExpanded ? 0 : 12, borderBottomRightRadius: isExpanded ? 0 : 12 }}
                                     >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                                            <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : doc.documentType === 'not_applicable' ? 'rgba(107,114,128,0.1)' : 'rgba(59,130,246,0.06)' }}>
-                                                {doc.documentType === 'receipt' ? (
-                                                    <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} />
-                                                ) : doc.documentType === 'not_applicable' ? (
-                                                    <Ban size={18} style={{ color: 'var(--text-muted)' }} />
-                                                ) : (
-                                                    <FileText size={18} style={{ color: '#3b82f6' }} />
-                                                )}
-                                            </div>
+                                            {doc.thumbnail ? (
+                                                <img src={doc.thumbnail} style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border-subtle)' }} alt="doc" />
+                                            ) : (
+                                                    <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : doc.documentType === 'not_applicable' ? 'rgba(107,114,128,0.1)' : 'rgba(59,130,246,0.06)' }}>
+                                                        {doc.documentType === 'receipt' ? (
+                                                            <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} />
+                                                        ) : doc.documentType === 'not_applicable' ? (
+                                                            <Ban size={18} style={{ color: 'var(--text-muted)' }} />
+                                                        ) : (
+                                                            <FileText size={18} style={{ color: '#3b82f6' }} />
+                                                        )}
+                                                    </div>
+                                            )}
                                             <div>
                                                 <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
                                                     {doc.documentType} • {doc.metadata.merchantName || doc.metadata.agency || doc.metadata.subject || 'Document'}
@@ -379,6 +383,21 @@ export function DocumentIntake() {
                                                                     />
                                                                 </div>
                                                             </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {doc.metadata.deductionSignals && doc.metadata.deductionSignals.length > 0 && (
+                                                <div style={{ marginTop: 16, padding: '10px 14px', borderRadius: 10, background: 'var(--accent-gold-dim)', border: '1px solid var(--accent-gold)22' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-gold)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                                        <Shield size={12} /> Tax Intelligence Signals
+                                                    </div>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                        {doc.metadata.deductionSignals.map((sig: string, idx: number) => (
+                                                            <span key={idx} style={{ fontSize: 11, color: 'var(--text-primary)', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: 6 }}>
+                                                                {sig}
+                                                            </span>
                                                         ))}
                                                     </div>
                                                 </div>
