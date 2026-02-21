@@ -127,17 +127,20 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                 if (diff < DIFFERENCE_THRESHOLD) {
                     steadyFrames.current++
                     // Animate the box zooming in to lock onto the document
-                    boxScale = Math.max(0.6, 0.9 - (steadyFrames.current * 0.05))
+                    boxScale = Math.max(0.65, 0.9 - (steadyFrames.current * 0.06))
 
                     if (steadyFrames.current >= STEADY_THRESHOLD) {
                         strokeColor = 'var(--accent-emerald, #10b981)' // Turn green when locked
+                        if (steadyFrames.current === STEADY_THRESHOLD) {
+                            if ('vibrate' in navigator) navigator.vibrate(30);
+                        }
                         handleManualCapture() // Auto trigger
                     }
                 } else {
                     steadyFrames.current = 0
                 }
 
-                // Draw the AR edge box
+                // Draw the magnetic corner brackets
                 const ow = overlay!.width
                 const oh = overlay!.height
                 const bw = ow * boxScale
@@ -145,10 +148,48 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                 const bx = (ow - bw) / 2
                 const by = (oh - bh) / 2
 
+                const cornerSize = 40
                 overlayCtx.strokeStyle = strokeColor
                 overlayCtx.lineWidth = 4
-                overlayCtx.setLineDash([20, 15])
-                overlayCtx.strokeRect(bx, by, bw, bh)
+                overlayCtx.lineCap = 'round'
+                overlayCtx.setLineDash([])
+
+                // Top Left
+                overlayCtx.beginPath()
+                overlayCtx.moveTo(bx + cornerSize, by)
+                overlayCtx.lineTo(bx, by)
+                overlayCtx.lineTo(bx, by + cornerSize)
+                overlayCtx.stroke()
+
+                // Top Right
+                overlayCtx.beginPath()
+                overlayCtx.moveTo(bx + bw - cornerSize, by)
+                overlayCtx.lineTo(bx + bw, by)
+                overlayCtx.lineTo(bx + bw, by + cornerSize)
+                overlayCtx.stroke()
+
+                // Bottom Left
+                overlayCtx.beginPath()
+                overlayCtx.moveTo(bx, by + bh - cornerSize)
+                overlayCtx.lineTo(bx, by + bh)
+                overlayCtx.lineTo(bx + cornerSize, by + bh)
+                overlayCtx.stroke()
+
+                // Bottom Right
+                overlayCtx.beginPath()
+                overlayCtx.moveTo(bx + bw - cornerSize, by + bh)
+                overlayCtx.lineTo(bx + bw, by + bh)
+                overlayCtx.lineTo(bx + bw, by + bh - cornerSize)
+                overlayCtx.stroke()
+
+                // If steadying, show progress bar
+                if (steadyFrames.current > 0 && steadyFrames.current < STEADY_THRESHOLD) {
+                    const progress = steadyFrames.current / STEADY_THRESHOLD
+                    overlayCtx.fillStyle = 'rgba(255,255,255,0.2)'
+                    overlayCtx.fillRect(bx, by + bh + 10, bw, 4)
+                    overlayCtx.fillStyle = 'var(--accent-emerald, #10b981)'
+                    overlayCtx.fillRect(bx, by + bh + 10, bw * progress, 4)
+                }
                 // --- End AR Edge Detection ---
             }
 

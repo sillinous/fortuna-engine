@@ -150,7 +150,30 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
       keywords: [strat.title, strat.category, strat.priority, 'strategy'].filter(Boolean) as string[],
     }))
 
-    return [...nav, ...actions, ...dataItems, ...stratItems]
+    // Document items (Scanned intelligence)
+    const docItems: CommandItem[] = state.documents
+      .filter(d => d.status === 'processed')
+      .map(doc => ({
+        id: `doc-${doc.id}`,
+        label: doc.metadata.merchantName || doc.documentType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        sublabel: `${doc.metadata.date || doc.dateAdded.split('T')[0]} · ${doc.metadata.totalAmount ? `$${doc.metadata.totalAmount.toLocaleString()}` : 'No amount'}`,
+        icon: doc.documentType === 'receipt' ? <Receipt size={16} /> : <FileText size={16} />,
+        category: 'data' as const,
+        action: () => {
+          // Future: Open specific document modal/view
+          onNavigate('documents')
+        },
+        keywords: [
+          doc.metadata.merchantName,
+          doc.documentType,
+          doc.summary,
+          'document',
+          'receipt',
+          'scan'
+        ].filter(Boolean) as string[],
+      }))
+
+    return [...nav, ...actions, ...dataItems, ...stratItems, ...docItems]
   }, [state, strategies, onNavigate, takeManualSnapshot, onClose])
 
   // Filter and sort

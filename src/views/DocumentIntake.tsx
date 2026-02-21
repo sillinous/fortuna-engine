@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { Camera, Image as ImageIcon, Check, TrendingDown, ArrowRight, RefreshCw, Loader2, AlertTriangle, FileText, Ban, Shield } from 'lucide-react'
+import { Camera, X, Check, Loader2, ArrowRight, TrendingDown, FileText, ImageIcon, Ban, RefreshCw, Trash2, AlertTriangle, Shield, AlertCircle } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 import { MobileDocumentScanner } from '../components/MobileDocumentScanner'
 import { processDocumentImage } from '../engine/vision-processor'
@@ -14,10 +14,30 @@ export function DocumentIntake() {
     const [scannedDocuments, setScannedDocuments] = useState<DocumentRecord[]>([])
     const [currentBatch, setCurrentBatch] = useState<IntakeBatch | null>(null)
     const [error, setError] = useState<string | null>(null)
-    const [processingMessage, setProcessingMessage] = useState('Extracting receipt details...')
+    const [processingMessage, setProcessingMessage] = useState('Initializing...')
+    const [selectedDocIds, setSelectedDocIds] = useState<string[]>([])
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
     const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
     const [scannedImageCount, setScannedImageCount] = useState(0)
+    const [hasRecovered, setHasRecovered] = useState(false)
+
+    // Recover session on mount
+    React.useEffect(() => {
+        if (!hasRecovered && state.intakeBatches?.length > 0) {
+            const lastBatch = state.intakeBatches[state.intakeBatches.length - 1]
+            // If the last batch was left in a pending state, recover it
+            if (lastBatch.status === 'uploading') {
+                const batchDocs = state.documents.filter((d: any) => d.batchId === lastBatch.id)
+                if (batchDocs.length > 0) {
+                    setCurrentBatch(lastBatch)
+                    setScannedDocuments(batchDocs)
+                    setScannedImageCount(batchDocs.length)
+                    setStage('review')
+                }
+            }
+            setHasRecovered(true)
+        }
+    }, [state.intakeBatches, state.documents, hasRecovered])
 
     const stats = useMemo(() => {
         const result = {
@@ -66,7 +86,7 @@ export function DocumentIntake() {
     const handleImageCapture = async (base64Image: string) => {
         // In Turbo Mode, we stay in 'scanning' stage and process concurrently
         setBackgroundProcessingCount((prev: number) => prev + 1)
-        setScannedImageCount(prev => prev + 1)
+        setScannedImageCount((prev: number) => prev + 1)
         setError(null)
 
         try {
@@ -100,7 +120,10 @@ export function DocumentIntake() {
             // Push to respective arrays in global state based on classification
             updateState((s: FortunaState) => {
                 const draftState = { ...s }
-                draftState.documents = [...draftState.documents, newDocument]
+
+                // CRITICAL: Ensure the new document is linked to the active batch
+                const documentWithBatch = { ...newDocument, batchId: activeBatchId }
+                draftState.documents = [...draftState.documents, documentWithBatch]
 
                 // If the vision processor also returned receipt line items, bridge it into the receipts array
                 if (visionResult.receiptItems) {
@@ -142,7 +165,11 @@ export function DocumentIntake() {
     }
 
     const handleProcessBatch = async () => {
-        if (!currentBatch) return
+        if (!currentBatch) {
+            console.error("No active batch found to finalize.")
+            setError("Scanning session expired or was lost. Please try again.")
+            return
+        }
 
         setStage('processing')
         setProcessingMessage('Applying routing rules & entity assignment...')
@@ -157,6 +184,9 @@ export function DocumentIntake() {
             )
 
             setStage('done')
+
+            // Force a global state save to ensure mutations in processBatch are persisted
+            updateState(s => ({ ...s }))
         } catch (err: any) {
             setError(err.message || "Batch processing failed.")
             setStage('review')
@@ -164,21 +194,44 @@ export function DocumentIntake() {
     }
 
     const handleUpdateDocMetadata = (docId: string, field: string, value: any) => {
+        // Update local state for snappy UI
         setScannedDocuments(prev => prev.map(doc => {
             if (doc.id === docId) {
-                return {
+                const updated = {
                     ...doc,
                     metadata: {
                         ...doc.metadata,
                         [field]: value
                     }
                 }
+                return updated
             }
             return doc
         }))
+
+        // Sync to global state
+        updateState((s: FortunaState) => {
+            const draft = { ...s }
+            draft.documents = draft.documents.map(d => {
+                if (d.id === docId) {
+                    return { ...d, metadata: { ...d.metadata, [field]: value } }
+                }
+                return d
+            })
+            // If it's a receipt, also update the receipt record
+            draft.receipts = draft.receipts.map(r => {
+                if (r.id === docId) {
+                    const rField = field === 'merchantName' ? 'merchantName' : field === 'totalAmount' ? 'totalAmount' : field
+                    return { ...r, [rField]: value }
+                }
+                return r
+            })
+            return draft
+        })
     }
 
     const handleUpdateLineItem = (docId: string, itemId: string, field: string, value: any) => {
+        // Update local state
         setScannedDocuments(prev => prev.map(doc => {
             if (doc.id === docId) {
                 const lineItems = doc.metadata.lineItems?.map((item: any) => {
@@ -197,6 +250,19 @@ export function DocumentIntake() {
             }
             return doc
         }))
+
+        // Sync to global state
+        updateState((s: FortunaState) => {
+            const draft = { ...s }
+            draft.receipts = draft.receipts.map(r => {
+                if (r.id === docId) {
+                    const items = r.items?.map(i => i.id === itemId ? { ...i, [field]: value } : i)
+                    return { ...r, items }
+                }
+                return r
+            })
+            return draft
+        })
     }
 
     const resetSession = () => {
@@ -287,19 +353,72 @@ export function DocumentIntake() {
                 <div>
                     <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                        <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>
-                            Scanned Documents ({scannedDocuments.length})
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                Scanned Documents ({scannedDocuments.length})
+                            </div>
+                            {scannedDocuments.length > 0 && (
+                                <button
+                                    onClick={() => {
+                                        const allIds = scannedDocuments.map(d => d.id)
+                                        setSelectedDocIds(allIds.length === selectedDocIds.length ? [] : allIds)
+                                    }}
+                                    style={{ background: 'none', border: 'none', color: 'var(--accent-gold)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+                                >
+                                    {selectedDocIds.length === scannedDocuments.length ? 'Deselect All' : 'Select All'}
+                                </button>
+                            )}
                         </div>
-                        <button onClick={handleStartScanning} style={styles.secondaryButton}>
-                            <Camera size={16} /> Scan More
-                        </button>
+                        <div style={{ display: 'flex', gap: 12 }}>
+                            {selectedDocIds.length > 0 && (
+                                <button
+                                    onClick={() => {
+                                        const idsToRemove = [...selectedDocIds]
+                                        setScannedDocuments(prev => prev.filter(d => !idsToRemove.includes(d.id)))
+                                        setSelectedDocIds([])
+
+                                        // Sync deletion to global state
+                                        updateState((s: FortunaState) => ({
+                                            ...s,
+                                            documents: s.documents.filter(d => !idsToRemove.includes(d.id)),
+                                            receipts: s.receipts.filter(r => !idsToRemove.includes(r.id))
+                                        }))
+                                    }}
+                                    style={{ ...styles.secondaryButton, color: 'var(--accent-red)', borderColor: 'var(--accent-red)44' }}
+                                >
+                                    <Trash2 size={16} /> Delete ({selectedDocIds.length})
+                                </button>
+                            )}
+                            <button onClick={handleStartScanning} style={styles.secondaryButton}>
+                                <Camera size={16} /> Scan More
+                            </button>
+                        </div>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 32 }}>
                         {scannedDocuments.map(doc => {
                             const isExpanded = expandedDocId === doc.id
+                            const isSelected = selectedDocIds.includes(doc.id)
+                            const isLowConfidence = (doc.metadata.confidenceScore || 1) < 0.7
                             return (
-                                <div key={doc.id} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                <div key={doc.id} style={{ display: 'flex', flexDirection: 'column', gap: 1, position: 'relative' }}>
+                                    <div
+                                        style={{ position: 'absolute', left: -32, top: 20, zIndex: 1 }}
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            setSelectedDocIds(prev => prev.includes(doc.id) ? prev.filter(id => id !== doc.id) : [...prev, doc.id])
+                                        }}
+                                    >
+                                        <div style={{
+                                            width: 18, height: 18, borderRadius: 4,
+                                            border: `2px solid ${isSelected ? 'var(--accent-gold)' : 'var(--border-medium)'}`,
+                                            background: isSelected ? 'var(--accent-gold)' : 'transparent',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            cursor: 'pointer'
+                                        }}>
+                                            {isSelected && <Check size={12} color="#000" strokeWidth={3} />}
+                                        </div>
+                                    </div>
                                     <div
                                         onClick={() => setExpandedDocId(isExpanded ? null : doc.id)}
                                         style={{ ...styles.receiptRow, cursor: 'pointer', borderBottomLeftRadius: isExpanded ? 0 : 12, borderBottomRightRadius: isExpanded ? 0 : 12 }}
@@ -340,17 +459,21 @@ export function DocumentIntake() {
                                         <div style={styles.expandedContent}>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
                                                 <div style={styles.inputGroup}>
-                                                    <label style={styles.label}>Merchant / Name</label>
+                                                    <label style={{ ...styles.label, color: isLowConfidence && !doc.metadata.merchantName ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+                                                        Merchant / Name {isLowConfidence && <AlertCircle size={10} style={{ marginLeft: 4 }} />}
+                                                    </label>
                                                     <input
-                                                        style={styles.input}
+                                                        style={{ ...styles.input, borderColor: isLowConfidence ? 'var(--accent-gold)55' : 'var(--border-subtle)' }}
                                                         value={doc.metadata.merchantName || doc.metadata.subject || ''}
                                                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateDocMetadata(doc.id, doc.metadata.merchantName ? 'merchantName' : doc.metadata.agency ? 'agency' : 'subject', e.target.value)}
                                                     />
                                                 </div>
                                                 <div style={styles.inputGroup}>
-                                                    <label style={styles.label}>Total Amount</label>
+                                                    <label style={{ ...styles.label, color: isLowConfidence && !doc.metadata.totalAmount ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+                                                        Total Amount {isLowConfidence && <AlertCircle size={10} style={{ marginLeft: 4 }} />}
+                                                    </label>
                                                     <input
-                                                        style={styles.input}
+                                                        style={{ ...styles.input, borderColor: isLowConfidence ? 'var(--accent-gold)55' : 'var(--border-subtle)' }}
                                                         type="number"
                                                         value={doc.metadata.totalAmount || doc.metadata.amountDue || 0}
                                                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateDocMetadata(doc.id, doc.metadata.totalAmount ? 'totalAmount' : 'amountDue', parseFloat(e.target.value))}

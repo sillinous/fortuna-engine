@@ -27,16 +27,23 @@ export function ReceiptReconciler() {
 
     // Auto-matching logic
     const suggestions = useMemo(() => {
-        const matches: Record<string, string> = {}
+        const matches: Record<string, { id: string, reason: string }> = {}
         receipts.forEach(receipt => {
             const possibleTx = transactions.find(tx => {
                 const txAmount = Math.abs(tx.amount)
                 const amountDiff = Math.abs(txAmount - receipt.totalAmount)
-                const isAmountMatch = amountDiff < txAmount * 0.05 // 5% tolerance for tips/fees
-                const isDateMatch = Math.abs(new Date(tx.date).getTime() - new Date(receipt.date).getTime()) < 3 * 24 * 60 * 60 * 1000 // 3 day window
-                return isAmountMatch && isDateMatch
+                const isAmountMatch = amountDiff < (txAmount * 0.05) // 5% tolerance
+                const isDateMatch = Math.abs(new Date(tx.date).getTime() - new Date(receipt.date).getTime()) < 3 * 24 * 60 * 60 * 1000
+
+                if (isAmountMatch && isDateMatch) {
+                    matches[receipt.id] = { id: tx.id, reason: 'Date & Amount Match' }
+                    return true
+                } else if (isAmountMatch && amountDiff < 0.01) {
+                    matches[receipt.id] = { id: tx.id, reason: 'Exact Amount Match' }
+                    return true
+                }
+                return false
             })
-            if (possibleTx) matches[receipt.id] = possibleTx.id
         })
         return matches
     }, [receipts, transactions])
@@ -59,11 +66,23 @@ export function ReceiptReconciler() {
     // Styles
     const card: React.CSSProperties = {
         background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-        borderRadius: 14, padding: 20, marginBottom: 12
+        borderRadius: 14, padding: 20, marginBottom: 16,
+        animation: 'slideUp 0.4s ease-out forwards',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
     }
 
     return (
         <div style={{ padding: '32px 40px', maxWidth: 1000 }}>
+            <style>{`
+                @keyframes slideUp {
+                    from { opacity: 0; transform: translateY(12px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .match-confirm:hover {
+                    transform: scale(1.02);
+                    filter: brightness(1.1);
+                }
+            `}</style>
             <div style={{ marginBottom: 32 }}>
                 <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 26, color: 'var(--text-primary)', marginBottom: 8 }}>
                     Receipt Reconciler
@@ -79,9 +98,9 @@ export function ReceiptReconciler() {
                     <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 16, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                         Pending Receipts ({receipts.length})
                     </h3>
-                    {receipts.map(receipt => {
-                        const suggestedTxId = suggestions[receipt.id]
-                        const suggestedTx = transactions.find(t => t.id === suggestedTxId)
+                    {receipts.map((receipt, idx) => {
+                        const suggestedMatch = suggestions[receipt.id]
+                        const suggestedTx = suggestedMatch ? transactions.find(t => t.id === suggestedMatch.id) : null
 
                         return (
                             <div key={receipt.id} style={card}>
@@ -95,21 +114,27 @@ export function ReceiptReconciler() {
                                     </div>
                                 </div>
 
-                                {suggestedTx ? (
+                                {suggestedMatch ? (
                                     <div style={{ background: 'var(--accent-emerald-dim)', border: '1px solid var(--accent-emerald)22', borderRadius: 10, padding: 12 }}>
-                                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-emerald)', textTransform: 'uppercase', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <CheckCircle2 size={12} /> Probable Match Found
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-emerald)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <CheckCircle2 size={12} /> Probable Match
+                                            </div>
+                                            <div style={{ fontSize: 9, padding: '2px 8px', background: 'rgba(16,185,129,0.1)', borderRadius: 12, color: 'var(--accent-emerald)', fontWeight: 600 }}>
+                                                {suggestedMatch.reason}
+                                            </div>
                                         </div>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div>
-                                                <div style={{ fontSize: 12, fontWeight: 600 }}>{suggestedTx.description}</div>
-                                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{suggestedTx.date} · ${Math.abs(suggestedTx.amount).toFixed(2)}</div>
+                                                <div style={{ fontSize: 12, fontWeight: 600 }}>{suggestedTx?.description}</div>
+                                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{suggestedTx?.date} · ${Math.abs(suggestedTx?.amount || 0).toFixed(2)}</div>
                                             </div>
                                             <button 
-                                                onClick={() => handleMatch(receipt.id, suggestedTx.id)}
-                                                style={{ padding: '6px 12px', background: 'var(--accent-emerald)', border: 'none', borderRadius: 6, color: '#000', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                                                onClick={() => handleMatch(receipt.id, suggestedMatch.id)}
+                                                className="match-confirm"
+                                                style={{ padding: '8px 16px', background: 'var(--accent-emerald)', border: 'none', borderRadius: 8, color: '#000', fontSize: 11, fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s' }}
                                             >
-                                                Confirm
+                                                Confirm Match
                                             </button>
                                         </div>
                                     </div>
