@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import { Camera, X, Check, Loader2, ArrowRight, TrendingDown, FileText, ImageIcon, Ban, RefreshCw, Trash2, AlertTriangle, Shield, AlertCircle } from 'lucide-react'
 import { useFortuna } from '../hooks/useFortuna'
 import { MobileDocumentScanner } from '../components/MobileDocumentScanner'
 import { processDocumentImage } from '../engine/vision-processor'
 import { createBatch, processBatch } from '../engine/batch-intake'
+import { BlobStore } from '../engine/blob-store'
 import { type IntakeBatch, type DocumentRecord, type ReceiptRecord, type FortunaState } from '../engine/storage'
 
 type IntakeStage = 'idle' | 'scanning' | 'processing' | 'review' | 'done'
@@ -11,33 +12,42 @@ type IntakeStage = 'idle' | 'scanning' | 'processing' | 'review' | 'done'
 export function DocumentIntake() {
     const { state, updateState } = useFortuna()
     const [stage, setStage] = useState<IntakeStage>('idle')
-    const [scannedDocuments, setScannedDocuments] = useState<DocumentRecord[]>([])
-    const [currentBatch, setCurrentBatch] = useState<IntakeBatch | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [processingMessage, setProcessingMessage] = useState('Initializing...')
     const [selectedDocIds, setSelectedDocIds] = useState<string[]>([])
     const [backgroundProcessingCount, setBackgroundProcessingCount] = useState(0)
     const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
-    const [scannedImageCount, setScannedImageCount] = useState(0)
-    const [hasRecovered, setHasRecovered] = useState(false)
 
-    // Recover session on mount
+    // REACTIVE STATE: Derive current session data directly from global state
+    // This solves multi-device sync and button-not-firing issues
+    const currentBatch = useMemo(() => {
+        if (!state.intakeBatches) return null
+        return state.intakeBatches.find(b => b.status === 'uploading') || null
+    }, [state.intakeBatches])
+
+    const [activeSessionBatchId, setActiveSessionBatchId] = useState<string | null>(null)
+
+    // Sync activeBatchId with currentBatch
     React.useEffect(() => {
-        if (!hasRecovered && state.intakeBatches?.length > 0) {
-            const lastBatch = state.intakeBatches[state.intakeBatches.length - 1]
-            // If the last batch was left in a pending state, recover it
-            if (lastBatch.status === 'uploading') {
-                const batchDocs = state.documents.filter((d: any) => d.batchId === lastBatch.id)
-                if (batchDocs.length > 0) {
-                    setCurrentBatch(lastBatch)
-                    setScannedDocuments(batchDocs)
-                    setScannedImageCount(batchDocs.length)
-                    setStage('review')
-                }
-            }
-            setHasRecovered(true)
+        if (currentBatch?.id) {
+            setActiveSessionBatchId(currentBatch.id)
         }
-    }, [state.intakeBatches, state.documents, hasRecovered])
+    }, [currentBatch?.id])
+
+    const scannedDocuments = useMemo(() => {
+        const bid = activeSessionBatchId || currentBatch?.id
+        if (!bid) return []
+        return state.documents.filter(d => d.batchId === bid)
+    }, [state.documents, currentBatch, activeSessionBatchId])
+
+    const scannedImageCount = scannedDocuments.length
+
+    // Auto-advance to review if we have a recovered or active session
+    useMemo(() => {
+        if (stage === 'idle' && scannedDocuments.length > 0) {
+            setStage('review')
+        }
+    }, [scannedDocuments.length, stage])
 
     const stats = useMemo(() => {
         const result = {
@@ -84,90 +94,128 @@ export function DocumentIntake() {
     }
 
     const handleImageCapture = async (base64Image: string) => {
-        // In Turbo Mode, we stay in 'scanning' stage and process concurrently
         setBackgroundProcessingCount((prev: number) => prev + 1)
-        setScannedImageCount((prev: number) => prev + 1)
         setError(null)
 
         try {
+            // 0. Provide context for multi-page grouping
+            // Find the last document in the current active batch for context
+            const activeBatch = state.intakeBatches.find(b => b.status === 'uploading')
+            const lastDoc = activeBatch
+                ? [...state.documents].reverse().find(d => d.batchId === activeBatch.id)
+                : null
+
+            const previousContext = lastDoc ? {
+                summary: lastDoc.summary || '',
+                type: lastDoc.documentType,
+                merchant: lastDoc.metadata.merchantName || lastDoc.metadata.agency
+            } : undefined
+
             // 1. Process via Vision AI
-            const visionResult = await processDocumentImage(base64Image, state)
+            const visionResult = await processDocumentImage(base64Image, 'openrouter', 'google/gemini-2.0-flash-001', previousContext)
 
             if (!visionResult.success || !visionResult.document) {
                 throw new Error(visionResult.error || "Failed to extract document data.")
             }
 
-            const newDocument = visionResult.document
+            const newImageData = visionResult.document
+            const { isContinuation } = visionResult
 
-            // 2. Initialize or retrieve batch 
-            let activeBatchId: string = ''
-            if (!currentBatch) {
-                const newBatch = createBatch('Mobile Scan Session')
-                activeBatchId = newBatch.id
-                updateState((s: FortunaState) => ({ ...s, intakeBatches: [...s.intakeBatches, newBatch] }))
-                setCurrentBatch(newBatch)
-            } else {
-                activeBatchId = currentBatch.id
+            // 1.5 Save full image to BlobStore (always use the new ID generated by vision-processor for the blob)
+            if (visionResult.fullImage) {
+                await BlobStore.save(newImageData.id, visionResult.fullImage)
             }
 
-            // Link to batch
-            // NOTE: Batch tracking for generic documents requires meta-model update.
-            // For now, attaching loosely via metadata or letting the UI stage handle bulk commit.
-
-            // Update local state
-            setScannedDocuments(prev => [...prev, newDocument])
-
-            // Push to respective arrays in global state based on classification
+            // 2. Update global state atomically
             updateState((s: FortunaState) => {
-                const draftState = { ...s }
+                const draft: FortunaState = { ...s }
+                let batch = draft.intakeBatches.find((b: IntakeBatch) => b.status === 'uploading')
 
-                // CRITICAL: Ensure the new document is linked to the active batch
-                const documentWithBatch = { ...newDocument, batchId: activeBatchId }
-                draftState.documents = [...draftState.documents, documentWithBatch]
-
-                // If the vision processor also returned receipt line items, bridge it into the receipts array
-                if (visionResult.receiptItems) {
-                    const receiptRecord: ReceiptRecord = {
-                        id: newDocument.id, // share ID for easy linking
-                        date: newDocument.metadata.documentDate || new Date().toISOString().split('T')[0],
-                        merchantName: newDocument.metadata.merchantName || 'Unknown Vendor',
-                        totalAmount: Number(newDocument.metadata.totalAmount) || 0,
-                        taxAmount: Number(newDocument.metadata.taxAmount) || 0,
-                        tipAmount: Number(newDocument.metadata.tipAmount) || 0,
-                        status: 'needs_review' as const,
-                        batchId: activeBatchId,
-                        items: visionResult.receiptItems
-                    }
-                    draftState.receipts = [...draftState.receipts, receiptRecord]
+                if (!batch) {
+                    batch = createBatch('Mobile Scan Session')
+                    draft.intakeBatches = [...draft.intakeBatches, batch]
                 }
 
-                // Also update the batch counts
-                const batch = draftState.intakeBatches.find((b: IntakeBatch) => b.id === activeBatchId)
-                if (batch) {
+                const activeBatchId = batch.id
+
+                // If it's a continuation, append to the last document instead of creating a new one
+                const existingDoc = isContinuation
+                    ? draft.documents.find((d: DocumentRecord) => d.id === lastDoc?.id)
+                    : null
+
+                if (existingDoc) {
+                    // APPEND PAGE
+                    existingDoc.pages = [...existingDoc.pages, `blob:${newImageData.id}`]
+                    existingDoc.pageThumbnails = [...existingDoc.pageThumbnails, newImageData.pageThumbnails[0]]
+                    existingDoc.pageCount = (existingDoc.pageCount || 1) + 1
+
+                    // Also update receipt if applicable (appending to the items list?)
+                    if (visionResult.receiptItems && visionResult.receiptItems.length > 0) {
+                        const existingReceipt = draft.receipts.find((r: ReceiptRecord) => r.id === existingDoc.id)
+                        if (existingReceipt) {
+                            existingReceipt.items = [...existingReceipt.items, ...visionResult.receiptItems]
+                            // Sum up totals if they were extracted from this page too (optional complexity)
+                            if (newImageData.metadata.totalAmount) {
+                                existingReceipt.totalAmount = (existingReceipt.totalAmount || 0) + Number(newImageData.metadata.totalAmount)
+                            }
+                        }
+                    }
+                } else {
+                    // NEW DOCUMENT
+                    const documentWithBatch: DocumentRecord = { ...newImageData, batchId: activeBatchId }
+                    draft.documents = [...draft.documents, documentWithBatch]
+
+                    // Handle Receipts
+                    if (visionResult.receiptItems) {
+                        const receiptRecord: ReceiptRecord = {
+                            id: newImageData.id,
+                            date: newImageData.metadata.documentDate || new Date().toISOString().split('T')[0],
+                            merchantName: newImageData.metadata.merchantName || 'Unknown Vendor',
+                            totalAmount: Number(newImageData.metadata.totalAmount) || 0,
+                            taxAmount: Number(newImageData.metadata.taxAmount) || 0,
+                            tipAmount: Number(newImageData.metadata.tipAmount) || 0,
+                            status: 'needs_review' as const,
+                            batchId: activeBatchId,
+                            items: visionResult.receiptItems
+                        }
+                        draft.receipts = [...draft.receipts, receiptRecord]
+                    }
+
+                    // Update batch counts for new document
                     batch.totalCount = (batch.totalCount || 0) + 1
-                    if (newDocument.documentType === 'receipt') {
-                        batch.receiptIds = [...(batch.receiptIds || []), newDocument.id]
+                    if (newImageData.documentType === 'receipt') {
+                        batch.receiptIds = [...(batch.receiptIds || []), newImageData.id]
                     } else {
-                        batch.documentIds = [...(batch.documentIds || []), newDocument.id]
+                        batch.documentIds = [...(batch.documentIds || []), newImageData.id]
                     }
                 }
 
-                return draftState
+                return draft
             })
+
+
 
         } catch (err: any) {
             console.error(err)
-            // We don't want to throw a fatal error that breaks the scanning flow. Just log or show a passive toast.
-            // For now, quietly fail the single scan and let the user re-scan.
+            setError(err.message || "Failed to process image.")
         } finally {
             setBackgroundProcessingCount((prev: number) => prev - 1)
         }
     }
 
+    // Use a ref to keep track of the batch ID even if the state is overwritten by sync
+    const lastSeenBatchId = useRef<string | null>(null)
+    if (currentBatch) lastSeenBatchId.current = currentBatch.id
+
     const handleProcessBatch = async () => {
-        if (!currentBatch) {
-            console.error("No active batch found to finalize.")
-            setError("Scanning session expired or was lost. Please try again.")
+        // Find the batch to process - be extremely robust
+        const targetBatch = state.intakeBatches.find(b => b.status === 'uploading') ||
+            state.intakeBatches.find(b => b.id === (activeSessionBatchId || currentBatch?.id)) ||
+            state.intakeBatches[state.intakeBatches.length - 1] // Fallback to last batch if lost
+
+        if (!targetBatch || (scannedDocuments.length === 0 && !targetBatch.totalCount)) {
+            console.error("No active batch found for processing. State batches:", state.intakeBatches)
+            setError("Scanning session expired or was lost. Please capture an image to resume.")
             return
         }
 
@@ -175,43 +223,54 @@ export function DocumentIntake() {
         setProcessingMessage('Applying routing rules & entity assignment...')
 
         try {
-            // 3. Run the heuristics and AI fallback across the collected batch
-            const result = await processBatch(
+            const { draft } = await processBatch(
                 state,
-                currentBatch.id,
-                (progress) => { setProcessingMessage(`Processing: ${Math.round(progress * 100)}%`) },
-                true // Enable AI resolution
+                targetBatch.id,
+                (progress: number) => { setProcessingMessage(`Processing: ${Math.round(progress)}%`) },
+                true
             )
 
-            setStage('done')
+            updateState((currentGlobal: FortunaState) => {
+                // Merge the processed batch results into the latest global state
+                // This prevents overwriting other concurrent state changes
+                const final = { ...currentGlobal }
+                final.intakeBatches = final.intakeBatches.map(b =>
+                    b.id === draft.intakeBatches.find(db => db.id === b.id)?.id
+                        ? draft.intakeBatches.find(db => db.id === b.id)!
+                        : b
+                )
+                final.documents = [...final.documents]
+                draft.documents.forEach(dd => {
+                    const idx = final.documents.findIndex(fd => fd.id === dd.id)
+                    if (idx >= 0) {
+                        final.documents[idx] = dd
+                    } else if (dd.batchId === targetBatch.id) {
+                        final.documents.push(dd)
+                    }
+                })
 
-            // Force a global state save to ensure mutations in processBatch are persisted
-            updateState(s => ({ ...s }))
+                final.receipts = [...final.receipts]
+                draft.receipts.forEach(dr => {
+                    const idx = final.receipts.findIndex(fr => fr.id === dr.id)
+                    if (idx >= 0) {
+                        final.receipts[idx] = dr
+                    } else if (dr.id === targetBatch.id || dr.batchId === targetBatch.id) {
+                        final.receipts.push(dr)
+                    }
+                })
+
+                return final
+            })
+            setStage('done')
         } catch (err: any) {
+            console.error("Batch processing failed:", err)
             setError(err.message || "Batch processing failed.")
             setStage('review')
         }
     }
 
     const handleUpdateDocMetadata = (docId: string, field: string, value: any) => {
-        // Update local state for snappy UI
-        setScannedDocuments(prev => prev.map(doc => {
-            if (doc.id === docId) {
-                const updated = {
-                    ...doc,
-                    metadata: {
-                        ...doc.metadata,
-                        [field]: value
-                    }
-                }
-                return updated
-            }
-            return doc
-        }))
-
-        // Sync to global state
-        updateState((s: FortunaState) => {
-            const draft = { ...s }
+        updateState((draft: FortunaState) => {
             draft.documents = draft.documents.map(d => {
                 if (d.id === docId) {
                     return { ...d, metadata: { ...d.metadata, [field]: value } }
@@ -231,29 +290,7 @@ export function DocumentIntake() {
     }
 
     const handleUpdateLineItem = (docId: string, itemId: string, field: string, value: any) => {
-        // Update local state
-        setScannedDocuments(prev => prev.map(doc => {
-            if (doc.id === docId) {
-                const lineItems = doc.metadata.lineItems?.map((item: any) => {
-                    if (item.id === itemId) {
-                        return { ...item, [field]: value }
-                    }
-                    return item
-                })
-                return {
-                    ...doc,
-                    metadata: {
-                        ...doc.metadata,
-                        lineItems
-                    }
-                }
-            }
-            return doc
-        }))
-
-        // Sync to global state
-        updateState((s: FortunaState) => {
-            const draft = { ...s }
+        updateState((draft: FortunaState) => {
             draft.receipts = draft.receipts.map(r => {
                 if (r.id === docId) {
                     const items = r.items?.map(i => i.id === itemId ? { ...i, [field]: value } : i)
@@ -267,13 +304,19 @@ export function DocumentIntake() {
 
     const resetSession = () => {
         setStage('idle')
-        setScannedDocuments([])
-        setCurrentBatch(null)
         setError(null)
+        // Mark current batch as cancelled or just clear status to stop recovery
+        if (currentBatch) {
+            updateState(draft => {
+                const batch = draft.intakeBatches.find(b => b.id === currentBatch.id)
+                if (batch) batch.status = 'completed' // or a dynamic 'cancelled' if we add it
+                return draft
+            })
+        }
     }
 
     return (
-        <div style={{ padding: '20px 16px', maxWidth: 800, margin: '0 auto', minHeight: 'calc(100vh - 64px)' }}>
+        <div style={{ padding: '20px 16px 120px 16px', maxWidth: 800, margin: '0 auto', minHeight: 'calc(100vh - 64px)' }}>
 
             <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
@@ -424,9 +467,25 @@ export function DocumentIntake() {
                                         style={{ ...styles.receiptRow, cursor: 'pointer', borderBottomLeftRadius: isExpanded ? 0 : 12, borderBottomRightRadius: isExpanded ? 0 : 12 }}
                                     >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                                            {doc.thumbnail ? (
-                                                <img src={doc.thumbnail} style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border-subtle)' }} alt="doc" />
-                                            ) : (
+                                            <div style={{ display: 'flex', position: 'relative', width: 44, height: 44 }}>
+                                                {doc.pageThumbnails && doc.pageThumbnails.length > 0 ? (
+                                                    doc.pageThumbnails.slice(0, 2).map((thumb, idx) => (
+                                                        <img
+                                                            key={idx}
+                                                            src={thumb}
+                                                            style={{
+                                                                width: 40, height: 40, borderRadius: 8, objectFit: 'cover',
+                                                                border: '1px solid var(--border-subtle)',
+                                                                position: 'absolute',
+                                                                left: idx * 4,
+                                                                top: idx * 4,
+                                                                zIndex: 10 - idx,
+                                                                opacity: 1 - (idx * 0.3)
+                                                            }}
+                                                            alt="doc"
+                                                        />
+                                                    ))
+                                                ) : (
                                                     <div style={{ ...styles.docIcon, background: doc.documentType === 'receipt' ? 'rgba(239,68,68,0.06)' : doc.documentType === 'not_applicable' ? 'rgba(107,114,128,0.1)' : 'rgba(59,130,246,0.06)' }}>
                                                         {doc.documentType === 'receipt' ? (
                                                             <TrendingDown size={18} style={{ color: 'var(--accent-red)' }} />
@@ -436,7 +495,18 @@ export function DocumentIntake() {
                                                             <FileText size={18} style={{ color: '#3b82f6' }} />
                                                         )}
                                                     </div>
-                                            )}
+                                                )}
+                                                {doc.pageCount > 1 && (
+                                                    <div style={{
+                                                        position: 'absolute', bottom: -4, right: -4,
+                                                        background: 'var(--accent-gold)', color: '#000',
+                                                        fontSize: 9, fontWeight: 800, padding: '1px 4px',
+                                                        borderRadius: 4, zIndex: 20, boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                                                    }}>
+                                                        {doc.pageCount}P
+                                                    </div>
+                                                )}
+                                            </div>
                                             <div>
                                                 <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
                                                     {doc.documentType} • {doc.metadata.merchantName || doc.metadata.agency || doc.metadata.subject || 'Document'}

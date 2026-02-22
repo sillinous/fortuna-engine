@@ -45,8 +45,9 @@ export async function processBatch(
     batchId: string,
     onProgress?: (progress: number) => void,
     useAI: boolean = false
-): Promise<BatchProcessingResult> {
-    const batch = state.intakeBatches.find(b => b.id === batchId)
+): Promise<{ draft: FortunaState; result: BatchProcessingResult }> {
+    const draft = JSON.parse(JSON.stringify(state)) as FortunaState
+    const batch = draft.intakeBatches.find(b => b.id === batchId)
     if (!batch) throw new Error(`Batch ${batchId} not found`)
 
     batch.status = 'processing'
@@ -58,10 +59,10 @@ export async function processBatch(
     }
 
     // Process Receipts
-    const pendingReceipts = state.receipts.filter(r => r.batchId === batchId && (r.status === 'scanned' || r.status === 'processing' || r.status === 'needs_review'))
+    const pendingReceipts = draft.receipts.filter(r => r.batchId === batchId && (r.status === 'scanned' || r.status === 'processing' || r.status === 'needs_review'))
 
     // Process general Documents
-    const pendingDocuments = state.documents.filter(d => d.batchId === batchId && (d.status === 'pending' || d.status === 'needs_review'))
+    const pendingDocuments = draft.documents.filter(d => d.batchId === batchId && (d.status === 'pending' || d.status === 'needs_review'))
 
     const totalToProcess = pendingReceipts.length + pendingDocuments.length
     let count = 0
@@ -69,7 +70,7 @@ export async function processBatch(
     // 1. Process Receipts
     for (const receipt of pendingReceipts) {
         try {
-            if (isDuplicate(receipt, state.receipts)) {
+            if (isDuplicate(receipt, draft.receipts)) {
                 receipt.status = 'needs_review'
                 result.duplicatesFound++
                 batch.errorCount++
@@ -91,7 +92,6 @@ export async function processBatch(
     // 2. Process General Documents
     for (const doc of pendingDocuments) {
         try {
-            // General document logic (e.g., integrity check, preliminary classification)
             doc.status = 'processed'
             result.itemsProcessed++
             batch.successCount++
@@ -104,17 +104,14 @@ export async function processBatch(
         onProgress?.(batch.progress)
     }
 
-    // 3. AI-Assisted Enrichment (Optional)
     if (useAI) {
-        // Run async AI categorization for any items that failed heuristics
-        await processReceiptsAsync(state, batchId)
+        await processReceiptsAsync(draft, batchId)
 
-        // Finalize counts based on AI success
-        batch.successCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'allocated').length +
-            state.documents.filter(d => d.batchId === batchId && d.status === 'processed').length
+        batch.successCount = draft.receipts.filter(r => r.batchId === batchId && r.status === 'allocated').length +
+            draft.documents.filter(d => d.batchId === batchId && d.status === 'processed').length
 
-        batch.errorCount = state.receipts.filter(r => r.batchId === batchId && r.status === 'needs_review').length +
-            state.documents.filter(d => d.batchId === batchId && d.status === 'needs_review').length
+        batch.errorCount = draft.receipts.filter(r => r.batchId === batchId && r.status === 'needs_review').length +
+            draft.documents.filter(d => d.batchId === batchId && d.status === 'needs_review').length
     }
 
     batch.progress = 100
@@ -122,7 +119,7 @@ export async function processBatch(
     batch.status = 'completed'
     batch.dateCompleted = new Date().toISOString()
 
-    return result
+    return { draft, result }
 }
 
 /**

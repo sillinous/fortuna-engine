@@ -445,14 +445,15 @@ export interface DocumentRecord {
   id: string
   documentType: DocumentType
   dateAdded: string
-  sourceFile: string // e.g., URL or base64 (though large base64 should be careful in LS)
-  metadata: Record<string, any> // Flexible payload for specific types
-  entityId?: string // Optional link to a specific entity
-  goalId?: string // Optional link to a financial goal
+  pages: string[] // array of blob URLs/references
+  pageThumbnails: string[] // array of low-res thumbnails
+  pageCount: number
+  metadata: Record<string, any>
+  entityId?: string
+  goalId?: string
   status: 'pending' | 'processed' | 'needs_review' | 'rejected'
   summary?: string
-  batchId?: string // Link to IntakeBatch
-  thumbnail?: string // low-res base64
+  batchId?: string
 }
 
 // ─── Metamodel v13 Additions ──────────────────────────────────────
