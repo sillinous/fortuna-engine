@@ -43,6 +43,18 @@ export default async (req: Request) => {
         maxTokens: 2048,
         fallback: "anthropic/claude-3-haiku",
       },
+      "grant-draft": {
+        provider: "openrouter",
+        model: "anthropic/claude-3.5-sonnet",
+        maxTokens: 4096,
+        fallback: "anthropic/claude-3-haiku",
+      },
+      "grant-review": {
+        provider: "openrouter",
+        model: "anthropic/claude-3.5-sonnet",
+        maxTokens: 4096,
+        fallback: "anthropic/claude-3-haiku",
+      },
       "clear-analysis": {
         provider: "anthropic",
         model: "claude-haiku-4-5",
