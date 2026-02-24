@@ -3,7 +3,7 @@
 
 const PLATFORMS = [
   { id: "oracle", name: "ORACLE Intelligence", url: "https://oracle-intelligence.netlify.app" },
-  { id: "grant-platform", name: "Grant Platform", url: "https://grant-platform-unless.netlify.app" },
+  { id: "grant-platform", name: "Grant Platform", url: "https://unless-fortuna-grants.netlify.app" },
   { id: "clear", name: "CLEAR Platform", url: "https://clear-platform.netlify.app" },
   { id: "ple", name: "Post-Labor Economics", url: "https://postlaboreconomics.netlify.app" },
   { id: "fortuna", name: "Fortuna Engine", url: "https://fortuna-engine.netlify.app" },
