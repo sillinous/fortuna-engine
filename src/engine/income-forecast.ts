@@ -139,8 +139,8 @@ export function forecastIncome(
 ): ForecastResult[] {
   const results: ForecastResult[] = []
   const now = new Date()
-  let currentYear = now.getFullYear()
-  let currentMonth = startMonth
+  const currentYear = now.getFullYear()
+  const currentMonth = startMonth
 
   // Generate monthly forecasts
   const monthlyForecasts: { month: string; income: number; expenses: number }[] = []

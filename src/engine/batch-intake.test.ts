@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { processBatch, autoRouteBatch } from './batch-intake'
-import type { FortunaState, IntakeBatch, ReceiptRecord } from './storage'
+import { createDefaultState } from './storage'
+import type { FortunaState } from './storage'
 
 describe('Batch Receipt Intake', () => {
-    const mockState: Partial<FortunaState> = {
+    const mockState: FortunaState = {
+        ...createDefaultState(),
         receipts: [
             {
                 id: 'existing-1',
@@ -42,9 +44,9 @@ describe('Batch Receipt Intake', () => {
             ]
         } as FortunaState
 
-        const result = await processBatch(state, 'batch-123')
+        const { draft, result } = await processBatch(state, 'batch-123')
         expect(result.duplicatesFound).toBe(1)
-        expect(state.receipts.find(r => r.id === 'new-1')?.status).toBe('needs_review')
+        expect(draft.receipts.find(r => r.id === 'new-1')?.status).toBe('needs_review')
     })
 
     it('should auto-route receipts to the batch default entity', () => {

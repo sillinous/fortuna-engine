@@ -285,11 +285,11 @@ export function calculateEntityCascade(
   const entityResults = entities.map(e => calculateEntityTax(e))
 
   // Consolidate to personal return
-  let totalPassThru = entityResults.reduce((s, r) => s + r.passThruIncome, 0)
+  const totalPassThru = entityResults.reduce((s, r) => s + r.passThruIncome, 0)
   let totalW2 = personalW2Income
-  let totalSETax = entityResults.reduce((s, r) => s + r.seTax, 0)
-  let totalFICATax = entityResults.reduce((s, r) => s + r.ficaTax, 0)
-  let totalQBI = entityResults.reduce((s, r) => s + r.qbiDeduction, 0)
+  const totalSETax = entityResults.reduce((s, r) => s + r.seTax, 0)
+  const totalFICATax = entityResults.reduce((s, r) => s + r.ficaTax, 0)
+  const totalQBI = entityResults.reduce((s, r) => s + r.qbiDeduction, 0)
 
   // Add S-Corp/C-Corp salaries to W-2 income
   for (const r of entityResults) {

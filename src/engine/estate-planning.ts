@@ -67,7 +67,7 @@ export function calculateEstateSummary(state: FortunaState): EstateSummary {
 
   // Add Life Insurance Death Benefits (if owned by the decedent/not in ILIT)
   let totalLifeInsuranceBenefit = 0
-  let missingBeneficiaries: string[] = []
+  const missingBeneficiaries: string[] = []
 
   estatePlan.lifeInsurance.forEach(policy => {
     // If it's not in an ILIT, the death benefit is generally included in the gross estate
@@ -80,10 +80,10 @@ export function calculateEstateSummary(state: FortunaState): EstateSummary {
   })
 
   // 2. Estate Tax Liability
-  let taxableEstate = Math.max(0, netEstateValue - federalExemption)
+  const taxableEstate = Math.max(0, netEstateValue - federalExemption)
 
   // Simplified flat 40% for the highest bracket on the excess
-  let estimatedEstateTaxLiability = taxableEstate > 0 ? taxableEstate * 0.40 : 0
+  const estimatedEstateTaxLiability = taxableEstate > 0 ? taxableEstate * 0.40 : 0
 
   // 3. Directives Check
   const hasWill = estatePlan.directives.some(d => d.type === 'will')

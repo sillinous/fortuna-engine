@@ -135,7 +135,7 @@ function parseAmount(str: string): number {
   return isNaN(num) ? 0 : num
 }
 
-function normalizeDate(dateStr: string): string {
+export function normalizeDate(dateStr: string): string {
   // Try common formats
   const formats = [
     /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/, // MM/DD/YYYY

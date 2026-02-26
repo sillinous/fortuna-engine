@@ -1,4 +1,4 @@
-import type { FortunaState, ReceiptRecord, ReceiptItem, BusinessExpense, Deduction } from './storage'
+import type { FortunaState, ReceiptRecord, ReceiptItem, BusinessExpense, DeductionRecord as Deduction } from './storage'
 import { genId } from './storage'
 import { categorizeReceiptAI } from './ai-categorization'
 
@@ -299,14 +299,14 @@ function generateLedgerEntries(receipt: ReceiptRecord): { expenses: BusinessExpe
             if (item.inferredCategory === 'Medical' || item.inferredCategory === 'Charity') {
                 deductions.push({
                     id: genId(),
-                    name: `${receipt.merchantName}: ${item.description}`,
-                    category: item.inferredCategory.toLowerCase() as any,
+                    description: `${receipt.merchantName}: ${item.description}`,
+                    categoryId: item.inferredCategory.toLowerCase(),
                     amount: item.amount,
-                    isItemized: true,
+                    status: 'realized',
                     entityId: 'personal',
                     sourceId: receipt.id + ':' + item.id,
                     taxYear: new Date(receipt.date).getFullYear()
-                })
+                } as any)
             }
         } else {
             // Business Expense

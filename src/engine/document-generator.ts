@@ -111,7 +111,7 @@ export function generateAuditChecklist(state: FortunaState): GeneratedDocument {
   const hasVehicle = deductions.some(d => d.category === 'vehicle')
   const hasCharitable = deductions.some(d => d.category === 'charitable')
   
-  let sections: { title: string; items: { text: string; critical: boolean }[] }[] = []
+  const sections: { title: string; items: { text: string; critical: boolean }[] }[] = []
   
   // Universal records
   sections.push({

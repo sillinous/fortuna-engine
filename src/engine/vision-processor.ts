@@ -39,7 +39,7 @@ Extract the relevant data and respond ONLY with a JSON object matching this sche
 Do not include any conversational text outside the JSON block.`
 
 /** Generates a low-res thumbnail from base64 image */
-async function createThumbnail(base64: string, maxWidth = 200): Promise<string> {
+export async function createThumbnail(base64: string, maxWidth = 200): Promise<string> {
     return new Promise((resolve) => {
         if (typeof document === 'undefined') return resolve('') // Node environment safety
         const img = new Image()

@@ -177,7 +177,7 @@ function calculateAssetDepreciation(
 ): AssetDepreciationResult {
   const assetClass = ASSET_CLASSES.find(c => c.id === asset.classId) || ASSET_CLASSES[4]
   const businessBasis = asset.cost * (asset.businessUsePercent / 100)
-  let depreciableBasis = businessBasis - asset.salvageValue
+  const depreciableBasis = businessBasis - asset.salvageValue
   let remaining = depreciableBasis
 
   const purchaseYear = new Date(asset.purchaseDate || new Date().toISOString()).getFullYear()

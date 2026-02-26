@@ -115,29 +115,33 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                 }
 
                 // --- AR Edge Detection Overlay ---
-                // We're doing a highly-simplified placeholder heuristic here: 
-                // In production, we'd use a Canny edge detector or contour finding algo.
-                // For now, if it's steady, we tighten a green border to pretend we found the document.
-
                 overlayCtx.clearRect(0, 0, overlay!.width, overlay!.height)
 
                 let boxScale = 0.9
-                let strokeColor = 'rgba(255, 255, 255, 0.5)'
+                let strokeColor = 'rgba(255, 255, 255, 0.4)'
+                let lineWidth = 3
 
                 if (diff < DIFFERENCE_THRESHOLD) {
                     steadyFrames.current++
-                    // Animate the box zooming in to lock onto the document
-                    boxScale = Math.max(0.65, 0.9 - (steadyFrames.current * 0.06))
+                    // Smooth, dynamic "lock-on" animation
+                    boxScale = Math.max(0.65, 0.9 - (steadyFrames.current * 0.05))
+                    lineWidth = 4 + (steadyFrames.current * 0.5) // get thicker as it locks
 
                     if (steadyFrames.current >= STEADY_THRESHOLD) {
-                        strokeColor = 'var(--accent-emerald, #10b981)' // Turn green when locked
+                        strokeColor = 'var(--accent-emerald, #10b981)' // Turn intensely green when locked
+                        lineWidth = 6
+
                         if (steadyFrames.current === STEADY_THRESHOLD) {
                             if ('vibrate' in navigator) navigator.vibrate(30);
+
+                            // Draw an intense flash outline before capture
+                            overlayCtx.fillStyle = 'rgba(16, 185, 129, 0.2)'
+                            overlayCtx.fillRect(0, 0, overlay!.width, overlay!.height)
                         }
                         handleManualCapture() // Auto trigger
                     }
                 } else {
-                    steadyFrames.current = 0
+                    steadyFrames.current = Math.max(0, steadyFrames.current - 1) // slow decay, not instant drop
                 }
 
                 // Draw the magnetic corner brackets
@@ -148,47 +152,39 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                 const bx = (ow - bw) / 2
                 const by = (oh - bh) / 2
 
-                const cornerSize = 40
+                const cornerSize = 45 // Longer, more pronounced brackets
                 overlayCtx.strokeStyle = strokeColor
-                overlayCtx.lineWidth = 4
+                overlayCtx.lineWidth = lineWidth
                 overlayCtx.lineCap = 'round'
+                overlayCtx.lineJoin = 'round'
+                overlayCtx.shadowColor = strokeColor === 'rgba(255, 255, 255, 0.4)' ? 'transparent' : strokeColor
+                overlayCtx.shadowBlur = steadyFrames.current > 0 ? 15 : 0 // Glow effect
                 overlayCtx.setLineDash([])
 
-                // Top Left
-                overlayCtx.beginPath()
-                overlayCtx.moveTo(bx + cornerSize, by)
-                overlayCtx.lineTo(bx, by)
-                overlayCtx.lineTo(bx, by + cornerSize)
-                overlayCtx.stroke()
+                // Helper to draw corners with nice rounded joints
+                const drawCorner = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) => {
+                    overlayCtx.beginPath()
+                    overlayCtx.moveTo(x1, y1)
+                    overlayCtx.lineTo(x2, y2)
+                    overlayCtx.lineTo(x3, y3)
+                    overlayCtx.stroke()
+                }
 
-                // Top Right
-                overlayCtx.beginPath()
-                overlayCtx.moveTo(bx + bw - cornerSize, by)
-                overlayCtx.lineTo(bx + bw, by)
-                overlayCtx.lineTo(bx + bw, by + cornerSize)
-                overlayCtx.stroke()
+                drawCorner(bx + cornerSize, by, bx, by, bx, by + cornerSize) // Top Left
+                drawCorner(bx + bw - cornerSize, by, bx + bw, by, bx + bw, by + cornerSize) // Top Right
+                drawCorner(bx, by + bh - cornerSize, bx, by + bh, bx + cornerSize, by + bh) // Bottom Left
+                drawCorner(bx + bw - cornerSize, by + bh, bx + bw, by + bh, bx + bw, by + bh - cornerSize) // Bottom Right
 
-                // Bottom Left
-                overlayCtx.beginPath()
-                overlayCtx.moveTo(bx, by + bh - cornerSize)
-                overlayCtx.lineTo(bx, by + bh)
-                overlayCtx.lineTo(bx + cornerSize, by + bh)
-                overlayCtx.stroke()
 
-                // Bottom Right
-                overlayCtx.beginPath()
-                overlayCtx.moveTo(bx + bw - cornerSize, by + bh)
-                overlayCtx.lineTo(bx + bw, by + bh)
-                overlayCtx.lineTo(bx + bw, by + bh - cornerSize)
-                overlayCtx.stroke()
-
-                // If steadying, show progress bar
+                // If steadying, show progress bar indicator
                 if (steadyFrames.current > 0 && steadyFrames.current < STEADY_THRESHOLD) {
                     const progress = steadyFrames.current / STEADY_THRESHOLD
+                    overlayCtx.shadowBlur = 0 // reset shadow for progress bar
                     overlayCtx.fillStyle = 'rgba(255,255,255,0.2)'
-                    overlayCtx.fillRect(bx, by + bh + 10, bw, 4)
+                    overlayCtx.beginPath(); overlayCtx.roundRect(bx, by + bh + 16, bw, 6, 3); overlayCtx.fill();
+
                     overlayCtx.fillStyle = 'var(--accent-emerald, #10b981)'
-                    overlayCtx.fillRect(bx, by + bh + 10, bw * progress, 4)
+                    overlayCtx.beginPath(); overlayCtx.roundRect(bx, by + bh + 16, bw * progress, 6, 3); overlayCtx.fill();
                 }
                 // --- End AR Edge Detection ---
             }
@@ -208,9 +204,6 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
         
         setIsCapturing(true)
         setShowFlash(true) // trigger flash feedback
-
-        // Don't clear interval, let it keep scanning
-        // if (frameInterval.current) window.clearInterval(frameInterval.current)
 
         const video = videoRef.current
         const canvas = canvasRef.current
@@ -232,10 +225,10 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
             steadyFrames.current = -5 // Requires 10 frames to re-trigger auto-capture a 2nd time
         }
 
-        setTimeout(() => setShowFlash(false), 300)
+        setTimeout(() => setShowFlash(false), 200) // Much faster, sharper photographic flash
 
         // Very short cooldown for turbo mode
-        setTimeout(() => setIsCapturing(false), 600)
+        setTimeout(() => setIsCapturing(false), 500)
     }, [isCapturing, onCapture])
 
     const handleConfirmBatch = () => {
@@ -246,10 +239,10 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
         return (
             <div style={styles.overlay}>
                 <div style={styles.errorContainer}>
-                    <div style={styles.errorIcon}><Camera size={32} /></div>
-                    <h3 style={styles.errorTitle}>Camera Access Denied</h3>
+                    <div style={styles.errorIcon}><Camera size={40} /></div>
+                    <h3 style={styles.errorTitle}>Camera Access Required</h3>
                     <p style={styles.errorText}>{error}</p>
-                    <button onClick={onClose} style={styles.secondaryButton}>Close</button>
+                    <button onClick={onClose} style={styles.secondaryButton}>Dismiss</button>
                 </div>
             </div>
         )
@@ -257,15 +250,57 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
 
     return (
         <div style={styles.overlay}>
-            {/* Header controls */}
-            <div style={styles.header}>
-                <button onClick={onClose} style={styles.iconButton}>
+            <style>{`
+                .tactile-button {
+                    transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+                }
+                .tactile-button:active {
+                    transform: scale(0.92);
+                }
+                .glass-header {
+                    background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 60%, transparent 100%);
+                    backdrop-filter: blur(8px);
+                    -webkit-backdrop-filter: blur(8px);
+                }
+                .glass-footer {
+                    background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 40%, transparent 100%);
+                    backdrop-filter: blur(12px);
+                    -webkit-backdrop-filter: blur(12px);
+                }
+                .scanner-flash {
+                    animation: photoflash 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+                }
+                @keyframes photoflash {
+                    0% { background-color: rgba(255,255,255,1); opacity: 1; }
+                    100% { background-color: rgba(255,255,255,0); opacity: 0; }
+                }
+                .shutter-glow {
+                    box-shadow: 0 0 0 4px rgba(255,255,255,0.2);
+                    transition: all 0.2s ease;
+                }
+                .shutter-glow:hover {
+                    box-shadow: 0 0 0 8px rgba(255,255,255,0.3);
+                }
+                @keyframes pulse-ring {
+                    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+                    70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+                }
+            `}</style>
+
+            {/* Header controls - Frosted Glass Gradient */}
+            <div className="glass-header" style={styles.header}>
+                <button onClick={onClose} className="tactile-button" style={styles.iconButton}>
                     <X size={24} color="#fff" />
                 </button>
+                <div style={{ flex: 1, textAlign: 'center', color: '#fff', fontSize: 14, fontWeight: 600, marginTop: 10, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.8 }}>
+                    Document Scanner
+                </div>
+                <div style={{ width: 44 }}></div> {/* Spacer */}
             </div>
 
             <div style={styles.cameraContainer}>
-                {showFlash && <div style={styles.flashOverlay}></div>}
+                {showFlash && <div className="scanner-flash" style={styles.flashOverlay}></div>}
 
                 <video
                     ref={videoRef}
@@ -275,20 +310,22 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                     style={styles.videoElement}
                 />
 
-                {/* Secondary transparent canvas for drawing AR green boxes over the video */}
                 <canvas
                     ref={overlayCanvasRef}
                     style={styles.arOverlay}
                 />
 
-                {/* Shaded boundaries to guide user - now simplified as the AR canvas handles the dynamic green boxes */}
                 <div style={styles.scannerGuide}>
                     <div style={styles.guideText}>
+                        <div style={{
+                            width: 8, height: 8, borderRadius: '50%', background: isCapturing ? 'transparent' : steadyFrames.current > 2 ? 'var(--accent-emerald)' : '#fff',
+                            marginRight: 8, display: 'inline-block', transition: 'background 0.3s'
+                        }}></div>
                         {isCapturing 
                             ? "Captured!"
                             : steadyFrames.current > 2
                                 ? "Hold steady..."
-                                : "Align document within frame"}
+                                : "Auto-Capture Active"}
                     </div>
                 </div>
             </div>
@@ -296,17 +333,17 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
             {/* Hidden canvas for processing */}
             <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-            {/* Bottom Controls */}
-            <div style={styles.footer}>
+            {/* Bottom Controls - Frosted Glass Footer */}
+            <div className="glass-footer" style={styles.footer}>
                 <div style={styles.captureContainer}>
                     {/* Badge showing # of scans */}
-                    <div style={{ position: 'absolute', left: 24, bottom: 24 }}>
+                    <div style={{ position: 'absolute', left: 24, bottom: 32 }}>
                         {capturedImages.length > 0 && (
                             <div style={styles.batchBadge}>
                                 <div style={styles.batchThumbnail}>
-                                    <span style={{ fontSize: 18, fontWeight: 700 }}>{capturedImages.length}</span>
+                                    <span style={{ fontSize: 20, fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{capturedImages.length}</span>
                                 </div>
-                                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-emerald)' }}>Processing...</div>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-emerald)', marginTop: 8 }}>Scanned</div>
                             </div>
                         )}
                     </div>
@@ -314,17 +351,18 @@ export function MobileDocumentScanner({ onCapture, onClose }: MobileDocumentScan
                     <button
                         onClick={handleManualCapture}
                         disabled={isCapturing}
+                        className="tactile-button shutter-glow"
                         style={styles.captureButton}
                         aria-label="Capture photo"
                     >
-                        <div style={{ ...styles.captureButtonInner, ...(isCapturing ? { opacity: 0.5 } : {}) }}></div>
+                        <div style={{ ...styles.captureButtonInner, ...(isCapturing ? { transform: 'scale(0.8)', opacity: 0.5 } : {}) }}></div>
                     </button>
 
                     {/* Done button */}
-                    <div style={{ position: 'absolute', right: 24, bottom: 30 }}>
+                    <div style={{ position: 'absolute', right: 24, bottom: 36 }}>
                         {capturedImages.length > 0 && (
-                            <button onClick={handleConfirmBatch} style={styles.doneButton}>
-                                Done <Check size={16} />
+                            <button onClick={handleConfirmBatch} className="tactile-button" style={styles.doneButton}>
+                                Next <Check size={18} />
                             </button>
                         )}
                     </div>
@@ -346,20 +384,19 @@ const styles: Record<string, React.CSSProperties> = {
     header: {
         position: 'absolute',
         top: 0, left: 0, right: 0,
-        padding: '24px 16px',
+        padding: '32px 24px 64px 24px', // Extra bottom padding for the gradient fade
         display: 'flex',
-        justifyContent: 'flex-start',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
         zIndex: 10,
-        background: 'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)',
     },
     iconButton: {
-        background: 'rgba(255,255,255,0.2)',
-        border: 'none',
+        background: 'rgba(255,255,255,0.15)',
+        border: '1px solid rgba(255,255,255,0.1)',
         borderRadius: '50%',
-        width: 40, height: 40,
+        width: 44, height: 44,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer',
-        backdropFilter: 'blur(4px)',
     },
     cameraContainer: {
         flex: 1,
@@ -376,34 +413,30 @@ const styles: Record<string, React.CSSProperties> = {
     },
     scannerGuide: {
         position: 'absolute',
-        top: '10%', bottom: '15%', left: '8%', right: '8%',
-        border: '2px solid rgba(255,255,255,0.3)',
-        boxShadow: '0 0 0 4000px rgba(0,0,0,0.5)', // Dims everything outside the box
+        top: '12%', bottom: '15%', left: '10%', right: '10%',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         justifyContent: 'center',
         pointerEvents: 'none',
-    },
-    corner: {
-        position: 'absolute',
-        width: 30, height: 30,
-        borderColor: 'var(--accent-gold, #facc15)',
-        borderStyle: 'solid',
+        paddingTop: 40,
     },
     guideText: {
         color: '#fff',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        padding: '8px 16px',
-        borderRadius: 20,
+        backgroundColor: 'rgba(0,0,0,0.65)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        padding: '8px 20px',
+        borderRadius: 24,
         fontSize: 14,
-        fontWeight: 500,
-        backdropFilter: 'blur(4px)',
+        fontWeight: 600,
+        display: 'flex', alignItems: 'center',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
     },
     footer: {
         position: 'absolute',
         bottom: 0, left: 0, right: 0,
-        padding: '32px 24px',
-        background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
+        padding: '64px 24px 40px 24px',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
@@ -413,20 +446,24 @@ const styles: Record<string, React.CSSProperties> = {
         display: 'flex',
         justifyContent: 'center',
         width: '100%',
+        position: 'relative',
+        alignItems: 'center',
     },
     captureButton: {
-        width: 72, height: 72,
+        width: 84, height: 84,
         borderRadius: '50%',
-        backgroundColor: 'rgba(255,255,255,0.3)',
+        backgroundColor: 'rgba(255,255,255,0.15)',
         border: '4px solid #fff',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer',
         padding: 0,
+        backdropFilter: 'blur(4px)',
     },
     captureButtonInner: {
-        width: 54, height: 54,
+        width: 62, height: 62,
         borderRadius: '50%',
         backgroundColor: '#fff',
+        transition: 'all 0.15s ease',
     },
     actionRow: {
         display: 'flex',
@@ -439,7 +476,7 @@ const styles: Record<string, React.CSSProperties> = {
         backgroundColor: 'var(--accent-gold, #facc15)',
         color: '#000',
         border: 'none',
-        borderRadius: 12,
+        borderRadius: 14,
         padding: '16px',
         fontSize: 16,
         fontWeight: 600,
@@ -448,88 +485,84 @@ const styles: Record<string, React.CSSProperties> = {
     },
     secondaryButton: {
         flex: 1,
-        backgroundColor: 'rgba(255,255,255,0.2)',
+        backgroundColor: 'rgba(255,255,255,0.15)',
         color: '#fff',
-        border: 'none',
-        borderRadius: 12,
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 14,
         padding: '16px',
         fontSize: 16,
         fontWeight: 500,
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
         cursor: 'pointer',
-        backdropFilter: 'blur(10px)',
     },
     errorContainer: {
-        backgroundColor: '#1a1f2e',
-        padding: 32,
-        borderRadius: 16,
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        backdropFilter: 'blur(12px)',
+        padding: 40,
+        borderRadius: 24,
         margin: 'auto',
-        maxWidth: 320,
+        maxWidth: 340,
         textAlign: 'center',
         border: '1px solid rgba(255,255,255,0.1)',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
     },
     errorIcon: {
-        color: '#ef4444',
-        marginBottom: 16,
+        color: 'var(--accent-red, #ef4444)',
+        marginBottom: 20,
+        background: 'rgba(239, 68, 68, 0.15)',
+        width: 80, height: 80, borderRadius: '50%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px',
     },
     errorTitle: {
         color: '#fff',
-        margin: '0 0 8px 0',
-        fontSize: 18,
+        margin: '0 0 12px 0',
+        fontSize: 20,
+        fontWeight: 700,
+        letterSpacing: '-0.02em',
     },
     errorText: {
-        color: '#9ca3af',
-        margin: '0 0 24px 0',
-        fontSize: 14,
-        lineHeight: 1.5,
+        color: 'rgba(255,255,255,0.7)',
+        margin: '0 0 32px 0',
+        fontSize: 15,
+        lineHeight: 1.6,
     },
     arOverlay: {
         position: 'absolute',
         top: 0, left: 0, right: 0, bottom: 0,
         width: '100%', height: '100%',
-        pointerEvents: 'none', // pass clicks through to the buttons
+        pointerEvents: 'none',
         zIndex: 2,
     },
     flashOverlay: {
         position: 'absolute',
         top: 0, left: 0, right: 0, bottom: 0,
-        backgroundColor: 'rgba(255,255,255,0.8)',
         zIndex: 3,
         pointerEvents: 'none',
-        animation: 'fadeOut 0.3s forwards',
     },
     batchBadge: {
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        animation: 'fadeUp 0.3s ease forwards',
     },
     batchThumbnail: {
-        width: 48, height: 60,
-        backgroundColor: 'var(--bg-elevated)',
+        width: 54, height: 68,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(8px)',
         border: '2px solid var(--accent-gold)',
-        borderRadius: 6,
+        borderRadius: 10,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 4, color: '#fff',
-        boxShadow: '2px 2px 0 0 rgba(255,255,255,0.2), 4px 4px 0 0 rgba(255,255,255,0.1)',
+        boxShadow: '2px 2px 0 0 rgba(255,255,255,0.15), 4px 4px 0 0 rgba(255,255,255,0.1)',
     },
     doneButton: {
         backgroundColor: 'var(--accent-gold)',
         color: '#000',
-        padding: '12px 24px',
-        borderRadius: 24,
+        padding: '14px 28px',
+        borderRadius: 30,
         border: 'none',
-        fontWeight: 700, fontSize: 16,
-        display: 'flex', alignItems: 'center', gap: 6,
+        fontWeight: 800, fontSize: 16,
+        display: 'flex', alignItems: 'center', gap: 8,
         cursor: 'pointer',
+        boxShadow: '0 4px 14px rgba(250, 204, 21, 0.4)',
+        animation: 'fadeUp 0.3s ease forwards',
     }
-}
-
-// Add the flash animation globally
-if (typeof document !== 'undefined') {
-    const style = document.createElement('style');
-    style.innerHTML = `
-        @keyframes fadeOut {
-            from { opacity: 0.8; }
-            to { opacity: 0; }
-        }
-    `;
-    document.head.appendChild(style);
 }

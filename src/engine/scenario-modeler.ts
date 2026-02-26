@@ -293,7 +293,7 @@ export function generateSensitivityCurve(
 // ─── Apply Modifications ─────────────────────────────────────────
 
 export function applyModifications(baseState: FortunaState, mods: ScenarioModification[]): FortunaState {
-  let state: FortunaState = JSON.parse(JSON.stringify(baseState))
+  const state: FortunaState = JSON.parse(JSON.stringify(baseState))
 
   for (const mod of mods) {
     switch (mod.type) {

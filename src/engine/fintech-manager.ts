@@ -233,7 +233,7 @@ export class FinTechConnectionManager {
       }
 
       // 2. Sync transactions (incremental if cursor exists)
-      let txnResult: TransactionSyncResult = { added: [], modified: [], removed: [], hasMore: false, nextCursor: '' }
+      const txnResult: TransactionSyncResult = { added: [], modified: [], removed: [], hasMore: false, nextCursor: '' }
 
       if (adapter.syncTransactions) {
         // Use cursor-based sync for incremental updates

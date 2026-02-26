@@ -144,7 +144,7 @@ function calcChildTaxCredit(state: FortunaState, agi: number): TaxCredit {
 
   // Count qualifying children (under 17 at end of tax year)
   let qualifyingChildren: number
-  let childDetails: string[] = []
+  const childDetails: string[] = []
   if (householdDeps.length > 0) {
     const qualifying = householdDeps.filter(d => {
       if (!d.dateOfBirth) return true // assume qualifying if no DOB

@@ -14,8 +14,8 @@
  */
 
 import type { FortunaState, IncomeStream, BusinessExpense, LegalEntity,
-  Deduction, DepreciationAsset, InvestmentPosition, RetirementAccount,
-  FinancialGoal, EstimatedPayment, HouseholdMember } from './storage'
+  DepreciationAsset, RetirementAccount, EstimatedPayment
+} from './storage'
 
 // ─── Validation Types ─────────────────────────────────────────────────────
 
@@ -321,19 +321,19 @@ export function validateEntity(entity: Partial<LegalEntity>, index: number): Val
   }
 
   // S-Corp officer salary check
-  if ((entity.type === 's_corp' || entity.type === 'llc') && entity.officerSalary !== undefined) {
+  if ((entity.type === 'scorp' || entity.type === 'llc_scorp' || entity.type === 'llc') && entity.officerSalary !== undefined) {
     if (entity.officerSalary < 20_000 && entity.isActive) {
       issues.push({
         field: `${prefix}.officerSalary`,
         severity: 'warning',
-        message: 'S-Corp officer salary under $20K may be challenged by IRS as unreasonably low',
+        message: 'S-Corp/LLC officer salary under $20K may be challenged by IRS as unreasonably low',
         irsRef: 'IRS Fact Sheet 2008-25',
       })
     }
   }
 
   // W-2 wages for QBI
-  if (entity.type === 's_corp' && entity.w2WagesPaid === 0 && entity.isActive) {
+  if (entity.type === 'scorp' && entity.w2WagesPaid === 0 && entity.isActive) {
     issues.push({
       field: `${prefix}.w2WagesPaid`,
       severity: 'info',
@@ -398,8 +398,8 @@ export function validateDepreciationAsset(asset: Partial<DepreciationAsset>, ind
     issues.push({ field: `${prefix}.name`, severity: 'error', message: 'Asset name is required' })
   }
 
-  if (asset.costBasis !== undefined && asset.costBasis <= 0) {
-    issues.push({ field: `${prefix}.costBasis`, severity: 'error', message: 'Cost basis must be greater than $0' })
+  if (asset.purchasePrice !== undefined && asset.purchasePrice <= 0) {
+    issues.push({ field: `${prefix}.purchasePrice`, severity: 'error', message: 'Purchase price must be greater than $0' })
   }
 
   if (asset.usefulLifeYears !== undefined && (asset.usefulLifeYears < 1 || asset.usefulLifeYears > 50)) {
@@ -411,9 +411,9 @@ export function validateDepreciationAsset(asset: Partial<DepreciationAsset>, ind
     })
   }
 
-  if (asset.section179 && asset.costBasis && asset.costBasis > IRS_LIMITS_2025.section_179_limit) {
+  if (asset.method === 'section_179' && asset.purchasePrice && asset.purchasePrice > IRS_LIMITS_2025.section_179_limit) {
     issues.push({
-      field: `${prefix}.section179`,
+      field: `${prefix}.method`,
       severity: 'warning',
       message: `Section 179 deduction limited to $${IRS_LIMITS_2025.section_179_limit.toLocaleString()} for 2025`,
       irsRef: 'IRC §179(b)',
@@ -457,14 +457,15 @@ export function validateFullState(state: FortunaState): {
   const issues: ValidationIssue[] = []
 
   // Profile
-  if (state.profile) {
-    const yr = validateTaxYear(state.profile.taxYear, 'profile.taxYear')
-    issues.push(...yr.issues)
+  // Profile / Global
+  const yr = validateTaxYear(state.taxYear, 'taxYear')
+  issues.push(...yr.issues)
 
+  if (state.profile) {
     if (state.profile.filingStatus === 'married_joint' || state.profile.filingStatus === 'married_separate') {
-      if (!state.profile.household?.spouse) {
+      if (!state.household?.members.some(m => m.role === 'spouse')) {
         issues.push({
-          field: 'profile.household.spouse',
+          field: 'household.members',
           severity: 'info',
           message: 'Filing as married but no spouse info entered. Adding spouse details improves accuracy.',
         })
@@ -472,7 +473,7 @@ export function validateFullState(state: FortunaState): {
     }
 
     if (state.profile.filingStatus === 'head_of_household') {
-      const hasDependents = (state.profile.household?.dependents?.length || 0) > 0
+      const hasDependents = (state.household?.dependents?.length || 0) > 0
       if (!hasDependents) {
         issues.push({
           field: 'profile.filingStatus',
@@ -529,7 +530,7 @@ export function validateFullState(state: FortunaState): {
 
   // SALT cap check
   const saltExpenses = (state.deductions || []).filter(d =>
-    d.category === 'state_local_tax' || d.category === 'property_tax',
+    d.categoryId === 'state_local_tax' || d.categoryId === 'property_tax',
   )
   const totalSALT = saltExpenses.reduce((s, d) => s + (d.amount || 0), 0)
   if (totalSALT > IRS_LIMITS_2025.salt_cap) {

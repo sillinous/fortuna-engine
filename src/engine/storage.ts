@@ -428,7 +428,7 @@ export interface LegalEntity {
   qualifiedPropertyUBIA?: number // Unadjusted basis of qualified property
 }
 
-export interface DeductionRecord {
+export interface DeductionRecord extends Attribution {
   id: string
   entityId: string // Which entity is claiming this (e.g. personal, sole_prop)
   categoryId: string // e.g. supplies, travel, home_office

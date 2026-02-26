@@ -118,8 +118,8 @@ describe('data safety: state repair', () => {
       profile: createDefaultState().profile,
       incomeStreams: [{ name: 'Job', type: 'w2', annualAmount: 50000, isActive: true }],
       expenses: [], entities: [], deductions: [], depreciationAssets: [],
-      investments: [], retirementAccounts: [], goals: [], documents: [],
-      estimatedPayments: [], bankTransactions: [],
+      investmentPortfolio: [], retirementAccounts: [], goals: [], documents: [],
+      estimatedPayments: [], auditHistory: [],
     }
     const { state, repairs } = repairState(noId)
     expect(state.incomeStreams[0].id).toBeTruthy()
@@ -272,8 +272,8 @@ describe('input validation: domain rules', () => {
 
   it('warns on Section 179 over limit', () => {
     const asset = {
-      name: 'Equipment', costBasis: 2_000_000,
-      section179: true, usefulLifeYears: 7,
+      name: 'Equipment', purchasePrice: 2_000_000,
+      method: 'section_179' as const, usefulLifeYears: 7,
     }
     const issues = validateDepreciationAsset(asset, 0)
     expect(issues.some(i => i.message.includes('Section 179'))).toBe(true)
@@ -560,7 +560,7 @@ describe('state integrity', () => {
     expect(Array.isArray(state.entities)).toBe(true)
     expect(Array.isArray(state.deductions)).toBe(true)
     expect(Array.isArray(state.depreciationAssets)).toBe(true)
-    expect(Array.isArray(state.investments)).toBe(true)
+    expect(Array.isArray(state.investmentPortfolio)).toBe(true)
     expect(Array.isArray(state.retirementAccounts)).toBe(true)
     expect(Array.isArray(state.goals)).toBe(true)
     expect(Array.isArray(state.documents)).toBe(true)

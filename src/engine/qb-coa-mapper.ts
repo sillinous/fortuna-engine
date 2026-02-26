@@ -390,7 +390,7 @@ export function extract1099Vendors(vendors: IIFVendor[]): {
  * QB Classes often represent business segments/entities.
  */
 export function classesToEntities(
-  classes: { name: string }[],
+  _classes: { name: string }[],
   transactions: IIFTransaction[],
 ): Partial<LegalEntity>[] {
   const entityMap: Map<string, { income: number; expenses: number; txnCount: number }> = new Map()
@@ -474,7 +474,7 @@ export interface QBImportSummary {
   expensesCreated: number
   entitiesDetected: number
   vendors1099: number
-  bankTransactionsImported: number
+  auditHistoryImported: number
   unmappedAccounts: string[]
   taxImpact: {
     estimatedGrossIncome: number
@@ -530,7 +530,7 @@ export function generateFortunaStatePatch(
       incomeStreams: incomeStreams as IncomeStream[],
       expenses: expenses as BusinessExpense[],
       entities: entities as LegalEntity[],
-      bankTransactions: bankTxns as BankTransaction[],
+      auditHistory: bankTxns as BankTransaction[],
     },
     summary: {
       accountsMapped: accountMap.size,
@@ -538,7 +538,7 @@ export function generateFortunaStatePatch(
       expensesCreated: expenses.length,
       entitiesDetected: entities.length,
       vendors1099: vendors1099.length,
-      bankTransactionsImported: bankTxns.length,
+      auditHistoryImported: bankTxns.length,
       unmappedAccounts: unmapped,
       taxImpact: {
         estimatedGrossIncome: Math.round(totalIncome * 100) / 100,

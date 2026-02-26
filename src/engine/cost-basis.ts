@@ -166,7 +166,7 @@ export class CostBasisTracker {
   }
 
   private selectLots(ticker: string, wallet?: string): TaxLot[] {
-    let lots = this.lots.filter(l =>
+    const lots = this.lots.filter(l =>
       l.ticker === ticker && l.remainingQty > 0 &&
       (!wallet || l.wallet === wallet)
     )

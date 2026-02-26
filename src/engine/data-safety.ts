@@ -37,7 +37,7 @@ export interface ValidationResult {
 export function validateState(state: unknown): ValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
-  let repaired = false
+  const repaired = false
 
   if (!state || typeof state !== 'object') {
     return { valid: false, errors: ['State is not an object'], warnings: [], repaired: false }
@@ -55,16 +55,19 @@ export function validateState(state: unknown): ValidationResult {
     } else if (!['single', 'married_joint', 'married_separate', 'head_of_household'].includes(p.filingStatus as string)) {
       errors.push(`Invalid filingStatus: "${p.filingStatus}"`)
     }
-    if (typeof p.taxYear !== 'number' || p.taxYear < 2020 || p.taxYear > 2030) {
-      warnings.push(`Unusual taxYear: ${p.taxYear}`)
-    }
+  }
+
+  // Top-level field validation
+  if (typeof s.taxYear !== 'number' || (s.taxYear as number) < 2020 || (s.taxYear as number) > 2030) {
+    warnings.push(`Unusual taxYear: ${s.taxYear}`)
   }
 
   // Arrays that must exist
   const requiredArrays = [
     'incomeStreams', 'expenses', 'entities', 'deductions',
-    'depreciationAssets', 'investments', 'retirementAccounts',
-    'goals', 'documents', 'estimatedPayments',
+    'depreciationAssets', 'investmentPortfolio', 'retirementAccounts',
+    'goals', 'documents', 'estimatedPayments', 'receipts',
+    'intakeBatches', 'auditHistory',
   ]
   for (const key of requiredArrays) {
     if (s[key] === undefined || s[key] === null) {
@@ -168,16 +171,30 @@ export function repairState(state: unknown): { state: FortunaState; repairs: str
   const s = { ...state } as Record<string, unknown>
 
   // Ensure profile exists
+  // Ensure profile and filingStatus exists
   if (!s.profile || typeof s.profile !== 'object') {
     s.profile = defaults.profile
     repairs.push('Restored missing profile')
+  } else {
+    const p = s.profile as Record<string, unknown>
+    if (!p.filingStatus || typeof p.filingStatus !== 'string') {
+      p.filingStatus = defaults.profile.filingStatus
+      repairs.push('Restored missing profile.filingStatus')
+    }
+  }
+
+  // Ensure taxYear exists
+  if (typeof s.taxYear !== 'number') {
+    s.taxYear = defaults.taxYear
+    repairs.push(`Restored taxYear to ${defaults.taxYear}`)
   }
 
   // Ensure all arrays exist
   const arrayFields = [
     'incomeStreams', 'expenses', 'entities', 'deductions',
-    'depreciationAssets', 'investments', 'retirementAccounts',
-    'goals', 'documents', 'estimatedPayments', 'bankTransactions',
+    'depreciationAssets', 'investmentPortfolio', 'retirementAccounts',
+    'goals', 'documents', 'estimatedPayments', 'receipts',
+    'intakeBatches', 'auditHistory',
   ]
   for (const key of arrayFields) {
     if (!Array.isArray(s[key])) {
