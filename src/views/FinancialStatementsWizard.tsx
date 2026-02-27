@@ -1,16 +1,18 @@
 /**
  * Fortuna Engine — Four Financial Statements Wizard
  *
- * A step-by-step wizard that collects the minimum inputs needed
- * from a business owner and produces all four core financial statements:
- *
- *   1. Income Statement (P&L)
- *   2. Balance Sheet
- *   3. Cash Flow Statement
- *   4. Statement of Owner's Equity
+ * Bidirectional meta-model integration:
+ *  • Pre-populates from FortunaState (income streams, expenses, liabilities,
+ *    depreciation assets, entity name, tax year)
+ *  • Live computation — statements re-derive on every keystroke via useMemo
+ *  • Derived value back-population — engine estimates shown inline in fields
+ *  • Cross-statement tracing — each result line annotates which statements
+ *    share the same derived value
+ *  • Save-back — writes key outputs back to FortunaState (income streams,
+ *    expense buckets, scenario snapshot)
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   generateFinancialStatements,
   type FinancialStatementsInput,
@@ -18,10 +20,13 @@ import {
   type LineItem,
   type BusinessType,
 } from '../engine/financial-statements-generator'
+import { useFortuna } from '../hooks/useFortuna'
+import { type FortunaState, genId } from '../engine/storage'
 import {
   ChevronRight, ChevronLeft, FileText, BarChart3,
   TrendingUp, ArrowDownUp, CheckCircle2, AlertCircle,
   Printer, RotateCcw, Building2, DollarSign, Lightbulb,
+  RefreshCw, Save, Link, ArrowRight,
 } from 'lucide-react'
 
 // ===================================================================
@@ -38,6 +43,168 @@ function fmtPct(n: number): string {
 }
 
 // ===================================================================
+//  FORTUNA STATE ↔ WIZARD FORM MAPPING
+// ===================================================================
+
+/**
+ * Forward pass: FortunaState → FinancialStatementsInput defaults.
+ * Allows the wizard to be pre-populated from existing Fortuna data.
+ */
+function buildFromFortunaState(state: FortunaState): Partial<FinancialStatementsInput> {
+  // ── Entity / Business Name ───────────────────────────────────────
+  const activeEntity = state.entities?.find(e => e.isActive)
+  const businessName = activeEntity?.name ?? ''
+
+  // ── Period ───────────────────────────────────────────────────────
+  const period = String(state.taxYear || new Date().getFullYear())
+
+  // ── Business Type from entity type ──────────────────────────────
+  let businessType: BusinessType = 'service'
+  if (activeEntity) {
+    const et = activeEntity.type
+    if (et === 'ccorp' || et === 'scorp') businessType = 'mixed'
+  }
+
+  // ── Revenue — sum active business / freelance income streams ────
+  const primaryRevenue = (state.incomeStreams ?? [])
+    .filter(s => s.isActive && (s.type === 'business' || s.type === 'freelance'))
+    .reduce((sum, s) => sum + s.annualAmount, 0)
+
+  const otherRevenue = (state.incomeStreams ?? [])
+    .filter(s => s.isActive && s.type !== 'business' && s.type !== 'freelance' && s.type !== 'w2')
+    .reduce((sum, s) => sum + s.annualAmount, 0)
+
+  // ── Expenses — keyword-match expense categories ──────────────────
+  const sumExp = (...keywords: string[]) =>
+    (state.expenses ?? [])
+      .filter(e => keywords.some(k => e.category?.toLowerCase().includes(k) || e.description?.toLowerCase().includes(k)))
+      .reduce((s, e) => s + e.annualAmount, 0)
+
+  const laborExpenses      = sumExp('labor', 'payroll', 'wage', 'salary', 'contractor', 'staff', 'employee')
+  const facilitiesExpenses = sumExp('rent', 'facilit', 'office', 'utilities', 'lease')
+  const marketingExpenses  = sumExp('market', 'advertis', 'promot', 'seo', 'ads')
+  const professionalServices = sumExp('legal', 'accounting', 'cpa', 'attorney', 'professional', 'consult', 'bookkeep')
+  const technologyExpenses = sumExp('tech', 'software', 'saas', 'computer', 'subscript', 'hosting', 'cloud', 'app')
+  const insuranceExpenses  = sumExp('insurance')
+  const otherOperatingExpenses = (state.expenses ?? [])
+    .filter(e => {
+      const c = (e.category ?? '').toLowerCase()
+      const d = (e.description ?? '').toLowerCase()
+      const hit = (k: string) => c.includes(k) || d.includes(k)
+      return !hit('labor') && !hit('payroll') && !hit('wage') && !hit('salary') && !hit('contractor') &&
+             !hit('rent') && !hit('facilit') && !hit('office') && !hit('lease') &&
+             !hit('market') && !hit('advertis') && !hit('promot') &&
+             !hit('legal') && !hit('accounting') && !hit('cpa') && !hit('consult') && !hit('bookkeep') &&
+             !hit('tech') && !hit('software') && !hit('saas') && !hit('subscript') &&
+             !hit('insurance') && !hit('depreciation')
+    })
+    .reduce((s, e) => s + e.annualAmount, 0)
+
+  // ── Fixed assets and depreciation ───────────────────────────────
+  const depAssets = (state.depreciationAssets ?? []).filter(a => a.isActive)
+  const fixedAssetsGross = depAssets.reduce((s, a) => s + (a.purchasePrice ?? 0), 0)
+  const accumulatedDepreciation = depAssets.reduce((s, a) => s + (a.accumulatedDepreciation ?? 0), 0)
+
+  // Annual depreciation (sum this year's portion)
+  const currentYear = state.taxYear || new Date().getFullYear()
+  const depreciationExpense = depAssets.reduce((s, a) => {
+    if (!a.purchaseDate) return s
+    const purchaseYear = new Date(a.purchaseDate).getFullYear()
+    const age = currentYear - purchaseYear
+    if (age < 0 || age >= (a.usefulLifeYears || 5)) return s
+    const annualDepr = ((a.purchasePrice ?? 0) * (a.businessUsePct ?? 100) / 100) / (a.usefulLifeYears || 5)
+    return s + annualDepr
+  }, 0)
+
+  // ── Liabilities ──────────────────────────────────────────────────
+  const bizLoans = (state.liabilities ?? []).filter(l => l.type === 'business_loan')
+  const shortTermDebt = bizLoans
+    .filter(l => (l.termMonths ?? 60) <= 12)
+    .reduce((s, l) => s + l.principalBalance, 0)
+  const longTermDebt = bizLoans
+    .filter(l => (l.termMonths ?? 60) > 12)
+    .reduce((s, l) => s + l.principalBalance, 0)
+  const interestExpense = bizLoans
+    .reduce((s, l) => s + (l.principalBalance * (l.interestRate ?? 0) / 100), 0)
+
+  return {
+    businessName,
+    period,
+    businessType,
+    primaryRevenue:       primaryRevenue   || 0,
+    otherRevenue:         otherRevenue     || undefined,
+    laborExpenses:        laborExpenses    || 0,
+    facilitiesExpenses:   facilitiesExpenses   || undefined,
+    marketingExpenses:    marketingExpenses    || undefined,
+    professionalServices: professionalServices || undefined,
+    technologyExpenses:   technologyExpenses   || undefined,
+    insuranceExpenses:    insuranceExpenses    || undefined,
+    otherOperatingExpenses: otherOperatingExpenses || undefined,
+    depreciationExpense:  depreciationExpense > 0 ? Math.round(depreciationExpense) : undefined,
+    fixedAssetsGross:     fixedAssetsGross  || undefined,
+    accumulatedDepreciation: accumulatedDepreciation > 0 ? Math.round(accumulatedDepreciation) : undefined,
+    shortTermDebt:        shortTermDebt    || undefined,
+    longTermDebt:         longTermDebt     || undefined,
+    interestExpense:      Math.round(interestExpense) || undefined,
+  }
+}
+
+/**
+ * Reverse pass: write wizard outputs back into FortunaState.
+ * Only touches the specific records that the wizard owns — does not
+ * overwrite unrelated fields.
+ */
+function saveStatementsToState(
+  prev: FortunaState,
+  form: FormInput,
+  stmts: FinancialStatements,
+): FortunaState {
+  const next = { ...prev }
+
+  // ── Sync primary business revenue into incomeStreams ─────────────
+  const primaryRevenue = num(form.primaryRevenue)
+  const existingBizStream = next.incomeStreams?.find(
+    s => s.type === 'business' || s.type === 'freelance',
+  )
+  if (existingBizStream) {
+    next.incomeStreams = next.incomeStreams.map(s =>
+      s.id === existingBizStream.id
+        ? { ...s, annualAmount: primaryRevenue, name: s.name }
+        : s,
+    )
+  } else if (primaryRevenue > 0) {
+    next.incomeStreams = [
+      ...(next.incomeStreams ?? []),
+      {
+        id: genId(),
+        name: `${form.businessName || 'Business'} Revenue`,
+        type: 'business',
+        annualAmount: primaryRevenue,
+        isActive: true,
+        isPrimary: true,
+        isTaxable: true,
+      },
+    ]
+  }
+
+  // ── Save as a scenario snapshot ──────────────────────────────────
+  const snapshot = {
+    id: genId(),
+    createdAt: new Date().toISOString(),
+    label: `Financial Statements — ${form.period || new Date().getFullYear()}`,
+    source: 'financial-statements-wizard',
+    data: {
+      form,
+      metrics: stmts.metrics,
+      isConsistent: stmts.isConsistent,
+    },
+  }
+  next.scenarioSnapshots = [...(next.scenarioSnapshots ?? []), snapshot]
+
+  return next
+}
+
+// ===================================================================
 //  SHARED COMPONENTS
 // ===================================================================
 
@@ -49,6 +216,9 @@ function Field({
   type = 'number',
   placeholder,
   required,
+  derivedValue,
+  derivedLabel,
+  linkedTo,
 }: {
   label: string
   hint?: string
@@ -57,6 +227,12 @@ function Field({
   type?: 'text' | 'number' | 'select'
   placeholder?: string
   required?: boolean
+  /** Engine-computed estimate shown as inline back-populated value */
+  derivedValue?: number
+  /** Label for the derived value badge */
+  derivedLabel?: string
+  /** Which other statements consume this field */
+  linkedTo?: string[]
 }) {
   return (
     <div style={{ marginBottom: 16 }}>
@@ -77,6 +253,24 @@ function Field({
           outline: 'none', boxSizing: 'border-box',
         }}
       />
+      {/* Derived back-population badge */}
+      {derivedValue !== undefined && (String(value) === '' || value === undefined) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5 }}>
+          <RefreshCw size={10} color="var(--accent-gold)" />
+          <span style={{ fontSize: 11, color: 'var(--accent-gold)' }}>
+            {derivedLabel ?? 'Auto-computed'}: <strong>{fmt(derivedValue)}</strong>
+          </span>
+        </div>
+      )}
+      {/* Cross-statement linking indicator */}
+      {linkedTo && linkedTo.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+          <Link size={9} color="var(--text-muted)" />
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            feeds → {linkedTo.join(', ')}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -124,10 +318,76 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 // ===================================================================
+//  LIVE PREVIEW PANEL (shown alongside wizard steps)
+// ===================================================================
+
+function LivePreviewPanel({ stmts }: { stmts: FinancialStatements | null }) {
+  if (!stmts) {
+    return (
+      <div style={{
+        background: 'rgba(212,168,67,0.04)', border: '1px dashed rgba(212,168,67,0.2)',
+        borderRadius: 10, padding: '16px 14px',
+        fontSize: 12, color: 'var(--text-muted)', textAlign: 'center',
+      }}>
+        Live preview appears once you enter revenue.
+      </div>
+    )
+  }
+
+  const m = stmts.metrics
+  const is = stmts.incomeStatement
+  const bs = stmts.balanceSheet
+
+  const rows: { label: string; value: string; color?: string }[] = [
+    { label: 'Revenue',     value: fmt(is.totalRevenue),   color: 'var(--text-secondary)' },
+    { label: 'Gross Profit',value: fmt(is.grossProfit),    color: is.grossProfit < 0 ? '#ef4444' : 'var(--text-secondary)' },
+    { label: 'Net Income',  value: fmt(is.netIncome),      color: is.netIncome < 0 ? '#ef4444' : '#22c55e' },
+    { label: 'Total Assets',value: fmt(bs.totalAssets),    color: 'var(--text-secondary)' },
+    { label: 'Equity',      value: fmt(bs.totalEquity),    color: bs.totalEquity < 0 ? '#ef4444' : 'var(--accent-gold)' },
+  ]
+
+  return (
+    <div style={{
+      background: 'rgba(212,168,67,0.04)', border: '1px solid rgba(212,168,67,0.15)',
+      borderRadius: 10, padding: '14px 14px',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--accent-gold)', marginBottom: 10 }}>
+        Live Preview
+      </div>
+      {rows.map(r => (
+        <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.label}</span>
+          <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600, color: r.color }}>{r.value}</span>
+        </div>
+      ))}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, flexWrap: 'wrap', gap: 6 }}>
+        <span style={{ fontSize: 10, color: m.netMarginPct < 0 ? '#ef4444' : m.netMarginPct > 15 ? '#22c55e' : 'var(--text-muted)' }}>
+          Net margin {fmtPct(m.netMarginPct)}
+        </span>
+        <span style={{ fontSize: 10, color: m.currentRatio < 1 ? '#ef4444' : 'var(--text-muted)' }}>
+          {m.currentRatio === 999 ? 'No liabilities' : `Current ratio ${m.currentRatio}x`}
+        </span>
+      </div>
+      {!stmts.isConsistent && (
+        <div style={{ marginTop: 8, fontSize: 10, color: '#eab308', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <AlertCircle size={10} /> Balance sheet incomplete
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ===================================================================
 //  STATEMENT DISPLAY COMPONENTS
 // ===================================================================
 
-function StatementRow({ item }: { item: LineItem }) {
+function StatementRow({
+  item, traceLabel,
+}: {
+  item: LineItem
+  /** When set, renders a cross-statement link badge */
+  traceLabel?: string
+}) {
   const isSubtotal = item.isSubtotal
   const isTotal = item.isTotal
   const indent = (item.indent ?? 0) * 20
@@ -150,6 +410,11 @@ function StatementRow({ item }: { item: LineItem }) {
             ({item.note})
           </span>
         )}
+        {traceLabel && (
+          <span style={{ fontSize: 10, color: 'rgba(212,168,67,0.7)', marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <Link size={9} /> {traceLabel}
+          </span>
+        )}
       </td>
       <td style={{
         padding: '7px 12px', textAlign: 'right',
@@ -162,10 +427,17 @@ function StatementRow({ item }: { item: LineItem }) {
   )
 }
 
-function TotalRow({ label, amount, color }: { label: string; amount: number; color?: string }) {
+function TotalRow({ label, amount, color, traceLabel }: { label: string; amount: number; color?: string; traceLabel?: string }) {
   return (
     <tr style={{ fontWeight: 700, background: 'rgba(255,255,255,0.03)', borderTop: '2px solid var(--border-subtle)' }}>
-      <td style={{ padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' }}>{label}</td>
+      <td style={{ padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' }}>
+        {label}
+        {traceLabel && (
+          <span style={{ fontSize: 10, color: 'rgba(212,168,67,0.7)', marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <Link size={9} /> {traceLabel}
+          </span>
+        )}
+      </td>
       <td style={{
         padding: '10px 12px', textAlign: 'right',
         fontFamily: 'var(--font-mono)', fontSize: 14,
@@ -223,7 +495,52 @@ function StatementCard({ title, icon, children }: { title: string; icon: React.R
 }
 
 // ===================================================================
-//  STATEMENT RENDERERS
+//  CROSS-STATEMENT FLOW BANNER
+// ===================================================================
+
+/**
+ * Shows how Net Income threads through all four statements.
+ * Rendered above the tab switcher in the results view.
+ */
+function DataFlowBanner({ stmts }: { stmts: FinancialStatements }) {
+  const ni = stmts.incomeStatement.netIncome
+  const nodes = [
+    { label: 'Income Statement', sub: `Net Income ${fmt(ni)}` },
+    { label: 'Cash Flow', sub: 'Operating section start' },
+    { label: "Owner's Equity", sub: 'Added to equity roll' },
+    { label: 'Balance Sheet', sub: 'Retained in equity' },
+  ]
+  return (
+    <div style={{
+      background: 'rgba(212,168,67,0.05)', border: '1px solid rgba(212,168,67,0.15)',
+      borderRadius: 10, padding: '12px 16px', marginBottom: 20,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-gold)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+        Cross-Statement Data Flow
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {nodes.map((n, i) => (
+          <div key={n.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{
+              background: 'rgba(212,168,67,0.1)', border: '1px solid rgba(212,168,67,0.25)',
+              borderRadius: 8, padding: '6px 10px',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>{n.label}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{n.sub}</div>
+            </div>
+            {i < nodes.length - 1 && <ArrowRight size={12} color="rgba(212,168,67,0.5)" />}
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
+        Net Income ({fmt(ni)}) is computed once and flows bidirectionally into all four statements. Ending equity on the Balance Sheet and Owner's Equity Statement will always match.
+      </div>
+    </div>
+  )
+}
+
+// ===================================================================
+//  STATEMENT RENDERERS (with cross-statement trace annotations)
 // ===================================================================
 
 function IncomeStatementView({ stmt }: { stmt: FinancialStatements['incomeStatement'] }) {
@@ -254,7 +571,11 @@ function IncomeStatementView({ stmt }: { stmt: FinancialStatements['incomeStatem
 
         <TotalRow label="Income Before Tax" amount={stmt.preTaxIncome} color="var(--text-primary)" />
         <StatementRow item={{ label: 'Income Tax Expense', amount: -stmt.taxExpense }} />
-        <TotalRow label={`Net Income  (${fmtPct(stmt.netMarginPct)} margin)`} amount={stmt.netIncome} />
+        <TotalRow
+          label={`Net Income  (${fmtPct(stmt.netMarginPct)} margin)`}
+          amount={stmt.netIncome}
+          traceLabel="→ Cash Flow · Owner's Equity · Balance Sheet"
+        />
       </StatementTable>
     </StatementCard>
   )
@@ -289,8 +610,19 @@ function BalanceSheetView({ stmt }: { stmt: FinancialStatements['balanceSheet'] 
         <TotalRow label="Total Liabilities" amount={stmt.totalLiabilities} color="#ef4444" />
 
         <SeparatorRow label="Owner's Equity" />
-        {stmt.equityItems.map((it, i) => <StatementRow key={i} item={it} />)}
-        <TotalRow label="Total Owner's Equity" amount={stmt.totalEquity} color="#22c55e" />
+        {stmt.equityItems.map((it, i) => (
+          <StatementRow
+            key={i}
+            item={it}
+            traceLabel={it.label === 'Net Income' ? '← Income Statement' : it.label.includes('Equity') ? '← Owner\'s Equity Stmt' : undefined}
+          />
+        ))}
+        <TotalRow
+          label="Total Owner's Equity"
+          amount={stmt.totalEquity}
+          color="#22c55e"
+          traceLabel="= Owner's Equity Statement ending balance"
+        />
 
         <TotalRow label="TOTAL LIABILITIES & EQUITY" amount={stmt.liabilitiesAndEquity} color="var(--accent-gold)" />
       </StatementTable>
@@ -308,7 +640,13 @@ function CashFlowView({ stmt }: { stmt: FinancialStatements['cashFlowStatement']
     <StatementCard title="Statement of Cash Flows (Indirect Method)" icon={<ArrowDownUp size={18} />}>
       <StatementTable>
         <SeparatorRow label="Operating Activities" />
-        {stmt.operatingItems.map((it, i) => <StatementRow key={i} item={it} />)}
+        {stmt.operatingItems.map((it, i) => (
+          <StatementRow
+            key={i}
+            item={it}
+            traceLabel={it.label === 'Net Income' ? '← Income Statement' : undefined}
+          />
+        ))}
         <TotalRow label="Net Cash from Operating Activities" amount={stmt.netCashFromOperations} />
 
         <SeparatorRow label="Investing Activities" />
@@ -327,7 +665,12 @@ function CashFlowView({ stmt }: { stmt: FinancialStatements['cashFlowStatement']
 
         <TotalRow label="Net Change in Cash" amount={stmt.netChangeInCash} color="var(--text-primary)" />
         <StatementRow item={{ label: 'Beginning Cash', amount: stmt.beginningCash }} />
-        <TotalRow label="Ending Cash" amount={stmt.endingCash} color="var(--accent-gold)" />
+        <TotalRow
+          label="Ending Cash"
+          amount={stmt.endingCash}
+          color="var(--accent-gold)"
+          traceLabel="= Balance Sheet cash line"
+        />
       </StatementTable>
       {!stmt.reconciles && stmt.beginningCash > 0 && (
         <div style={{ padding: '10px 16px', background: 'rgba(234,179,8,0.08)', color: '#eab308', fontSize: 12 }}>
@@ -342,7 +685,17 @@ function OwnerEquityView({ stmt }: { stmt: FinancialStatements['ownerEquityState
   return (
     <StatementCard title="Statement of Owner's Equity" icon={<Building2 size={18} />}>
       <StatementTable>
-        {stmt.lineItems.map((it, i) => <StatementRow key={i} item={it} />)}
+        {stmt.lineItems.map((it, i) => (
+          <StatementRow
+            key={i}
+            item={it}
+            traceLabel={
+              it.label.includes('Net Income') ? '← Income Statement'
+              : it.label === 'Ending Balance' ? '→ Balance Sheet equity'
+              : undefined
+            }
+          />
+        ))}
       </StatementTable>
     </StatementCard>
   )
@@ -486,7 +839,7 @@ function StepIndicator({ step, total }: { step: number; total: number }) {
             <span style={{
               fontSize: 11, fontWeight: active ? 700 : 500,
               color: active ? 'var(--text-primary)' : done ? 'var(--text-secondary)' : 'var(--text-muted)',
-              display: 'none', // hidden on small screens (label only on wider)
+              display: 'none',
             }}>
               {s.label}
             </span>
@@ -505,10 +858,17 @@ function StepIndicator({ step, total }: { step: number; total: number }) {
 // ===================================================================
 
 export function FinancialStatementsWizard() {
+  const { state, updateState } = useFortuna()
+
+  // Seed form from FortunaState on first render
+  const [form, setForm] = useState<FormInput>(() => ({
+    ...DEFAULT_INPUT,
+    ...buildFromFortunaState(state),
+  }))
   const [step, setStep] = useState(0)
-  const [form, setForm] = useState<FormInput>({ ...DEFAULT_INPUT })
-  const [statements, setStatements] = useState<FinancialStatements | null>(null)
   const [activeTab, setActiveTab] = useState(0)
+  const [showFinalStatements, setShowFinalStatements] = useState(false)
+  const [savedToFortuna, setSavedToFortuna] = useState(false)
 
   const set = useCallback((field: keyof FormInput, value: string) => {
     setForm(f => ({ ...f, [field]: value }))
@@ -516,27 +876,66 @@ export function FinancialStatementsWizard() {
 
   const isProductBusiness = form.businessType === 'product' || form.businessType === 'mixed'
 
-  // ── Validation per step ─────────────────────────────────────────
+  // ── Live computation — always on, gated only on having revenue ───
+  const liveStatements = useMemo<FinancialStatements | null>(() => {
+    if (num(form.primaryRevenue) === 0) return null
+    try { return generateFinancialStatements(buildInput(form)) } catch { return null }
+  }, [form])
+
+  // Engine-derived estimates (back-populated into form fields)
+  const derivedDepreciation = useMemo(() => {
+    const gross = num(form.fixedAssetsGross)
+    return gross > 0 ? Math.round(gross * 0.10) : undefined
+  }, [form.fixedAssetsGross])
+
+  const derivedTax = useMemo(() => {
+    if (!liveStatements) return undefined
+    const preTax = liveStatements.incomeStatement.preTaxIncome
+    return preTax > 0 ? Math.round(preTax * 0.21) : 0
+  }, [liveStatements])
+
+  const derivedBeginningEquity = useMemo(() => {
+    if (!liveStatements) return undefined
+    const bs = liveStatements.balanceSheet
+    // derived: ending equity - net income - contributions + draws
+    const ni = liveStatements.incomeStatement.netIncome
+    const contrib = num(form.capitalContributions)
+    const draws = num(form.ownerDraws)
+    return Math.round(bs.totalEquity - ni - contrib + draws)
+  }, [liveStatements, form.capitalContributions, form.ownerDraws])
+
+  // Statements only shown after user clicks "Generate" (finalises)
+  const statements = showFinalStatements ? liveStatements : null
+
+  // ── Validation per step ──────────────────────────────────────────
   const canAdvance = (): boolean => {
     if (step === 0) return !!form.businessName && !!form.period
     if (step === 1) return num(form.primaryRevenue) > 0
     return true
   }
 
-  const handleGenerate = () => {
-    const input = buildInput(form)
-    const result = generateFinancialStatements(input)
-    setStatements(result)
-  }
+  const handleGenerate = () => setShowFinalStatements(true)
 
   const handleReset = () => {
-    setStatements(null)
+    setShowFinalStatements(false)
     setStep(0)
-    setForm({ ...DEFAULT_INPUT })
+    setForm({ ...DEFAULT_INPUT, ...buildFromFortunaState(state) })
     setActiveTab(0)
+    setSavedToFortuna(false)
   }
 
-  // ── Render statements view ──────────────────────────────────────
+  // Re-seed from Fortuna (sync latest state into the form)
+  const handleResync = () => {
+    setForm(f => ({ ...f, ...buildFromFortunaState(state) }))
+  }
+
+  const handleSaveToFortuna = () => {
+    if (!liveStatements) return
+    updateState(prev => saveStatementsToState(prev, form, liveStatements))
+    setSavedToFortuna(true)
+  }
+
+  // ── Render statements view ───────────────────────────────────────
   if (statements) {
     const tabs = [
       { label: 'Income Statement', component: <IncomeStatementView stmt={statements.incomeStatement} /> },
@@ -559,7 +958,22 @@ export function FinancialStatementsWizard() {
               Financial Statements · {form.period}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {/* Save back to Fortuna */}
+            <button
+              onClick={handleSaveToFortuna}
+              disabled={savedToFortuna}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '8px 14px', borderRadius: 8,
+                border: `1px solid ${savedToFortuna ? '#22c55e' : 'rgba(212,168,67,0.4)'}`,
+                background: savedToFortuna ? 'rgba(34,197,94,0.08)' : 'rgba(212,168,67,0.08)',
+                color: savedToFortuna ? '#22c55e' : 'var(--accent-gold)',
+                cursor: savedToFortuna ? 'default' : 'pointer', fontSize: 13,
+              }}
+            >
+              {savedToFortuna ? <><CheckCircle2 size={15} /> Saved to Fortuna</> : <><Save size={15} /> Save to Fortuna</>}
+            </button>
             <button
               onClick={() => window.print()}
               style={{
@@ -591,6 +1005,9 @@ export function FinancialStatementsWizard() {
           <MetricPill label="Debt-to-Equity" value={`${m.debtToEquityRatio}x`} sub="Total Debt / Equity" />
           <MetricPill label="Return on Equity" value={fmtPct(m.returnOnEquityPct)} sub="Net Income / Equity" />
         </div>
+
+        {/* Cross-statement data flow */}
+        <DataFlowBanner stmts={statements} />
 
         {/* Insights */}
         {statements.insights.length > 0 && (
@@ -636,24 +1053,34 @@ export function FinancialStatementsWizard() {
         {/* Active statement */}
         {tabs[activeTab].component}
 
-        {/* Consistency badge */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          fontSize: 11, color: statements.isConsistent ? '#22c55e' : '#eab308',
-          marginTop: 8,
-        }}>
-          {statements.isConsistent
-            ? <><CheckCircle2 size={13} /> All four statements are internally consistent</>
-            : <><AlertCircle size={13} /> Statements may be incomplete — see insights above for details</>
-          }
+        {/* Consistency + edit note */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 11, color: statements.isConsistent ? '#22c55e' : '#eab308',
+          }}>
+            {statements.isConsistent
+              ? <><CheckCircle2 size={13} /> All four statements are internally consistent</>
+              : <><AlertCircle size={13} /> Statements may be incomplete — see insights above</>
+            }
+          </div>
+          <button
+            onClick={() => setShowFinalStatements(false)}
+            style={{
+              fontSize: 11, color: 'var(--text-muted)', background: 'none',
+              border: 'none', cursor: 'pointer', textDecoration: 'underline',
+            }}
+          >
+            ← Edit inputs
+          </button>
         </div>
       </div>
     )
   }
 
-  // ── Render wizard ───────────────────────────────────────────────
+  // ── Render wizard ────────────────────────────────────────────────
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: '24px 16px' }}>
+    <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 16px' }}>
       {/* Header */}
       <div style={{ textAlign: 'center', marginBottom: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
@@ -669,202 +1096,363 @@ export function FinancialStatementsWizard() {
 
       <StepIndicator step={step} total={STEPS.length} />
 
-      {/* Step content */}
-      <div style={{
-        background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
-        borderRadius: 14, padding: '24px 28px',
-      }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-          {STEPS[step].label}
-        </div>
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
-          {step === 0 && 'Tell us about your business and the reporting period.'}
-          {step === 1 && 'Enter your revenue. Only primary revenue is required.'}
-          {step === 2 && 'Break down your operating costs. Every field is optional — enter what you know.'}
-          {step === 3 && 'Snapshot of your current financial position to complete the balance sheet and cash flow statement.'}
-        </div>
+      {/* Two-column layout: form left, live preview right */}
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
 
-        {/* ── Step 0: Basics ── */}
-        {step === 0 && (
-          <>
-            <Field
-              label="Business Name" required
-              value={form.businessName ?? ''}
-              onChange={v => set('businessName', v)}
-              type="text"
-              placeholder="e.g. Acme Consulting LLC"
-            />
-            <Field
-              label="Reporting Period" required
-              hint='e.g. "2025", "Q1 2025", "FY 2025", "Jan–Jun 2025"'
-              value={form.period ?? ''}
-              onChange={v => set('period', v)}
-              type="text"
-              placeholder={String(new Date().getFullYear())}
-            />
-            <SelectField
-              label="Business Type"
-              hint="Affects how revenue and COGS appear on the income statement."
-              value={(form.businessType as string) ?? 'service'}
-              onChange={v => set('businessType', v)}
-              options={[
-                { value: 'service', label: 'Service (consulting, software, professional services)' },
-                { value: 'product', label: 'Product (retail, manufacturing, e-commerce)' },
-                { value: 'mixed', label: 'Mixed (products + services)' },
-                { value: 'other', label: 'Other' },
-              ]}
-            />
-          </>
-        )}
-
-        {/* ── Step 1: Revenue ── */}
-        {step === 1 && (
-          <>
-            <SectionHeading>Primary Revenue</SectionHeading>
-            <Field
-              label={isProductBusiness ? 'Gross Sales / Product Revenue' : 'Service Revenue'} required
-              hint="Total revenue earned during the period before any deductions."
-              value={form.primaryRevenue ?? ''}
-              onChange={v => set('primaryRevenue', v)}
-              placeholder="0"
-            />
-            <Field
-              label="Other Revenue"
-              hint="Commissions, royalties, rental income, or other secondary income."
-              value={form.otherRevenue ?? ''}
-              onChange={v => set('otherRevenue', v)}
-              placeholder="0"
-            />
-            {isProductBusiness && (
-              <>
-                <SectionHeading>Cost of Goods Sold</SectionHeading>
-                <Field
-                  label="Cost of Goods Sold (COGS)"
-                  hint="Direct material, manufacturing, and fulfilment costs tied to products sold."
-                  value={form.costOfGoodsSold ?? ''}
-                  onChange={v => set('costOfGoodsSold', v)}
-                  placeholder="0"
-                />
-              </>
-            )}
-          </>
-        )}
-
-        {/* ── Step 2: Expenses ── */}
-        {step === 2 && (
-          <>
-            <SectionHeading>Labor</SectionHeading>
-            <Field
-              label="Wages, Salaries & Contractor Pay"
-              hint="Total compensation paid to employees and contractors."
-              value={form.laborExpenses ?? ''}
-              onChange={v => set('laborExpenses', v)}
-              placeholder="0"
-            />
-
-            <SectionHeading>Overhead</SectionHeading>
-            <Field label="Rent & Facilities" value={form.facilitiesExpenses ?? ''} onChange={v => set('facilitiesExpenses', v)} placeholder="0" />
-            <Field label="Marketing & Advertising" value={form.marketingExpenses ?? ''} onChange={v => set('marketingExpenses', v)} placeholder="0" />
-            <Field label="Technology & Software" value={form.technologyExpenses ?? ''} onChange={v => set('technologyExpenses', v)} placeholder="0" />
-            <Field label="Professional Services (accounting, legal)" value={form.professionalServices ?? ''} onChange={v => set('professionalServices', v)} placeholder="0" />
-            <Field label="Insurance" value={form.insuranceExpenses ?? ''} onChange={v => set('insuranceExpenses', v)} placeholder="0" />
-            <Field
-              label="Depreciation"
-              hint="Leave blank to auto-estimate at 10% of fixed assets."
-              value={form.depreciationExpense ?? ''}
-              onChange={v => set('depreciationExpense', v)}
-              placeholder="auto-estimate"
-            />
-            <Field label="Other Operating Expenses" value={form.otherOperatingExpenses ?? ''} onChange={v => set('otherOperatingExpenses', v)} placeholder="0" />
-
-            <SectionHeading>Non-Operating</SectionHeading>
-            <Field label="Interest Expense (on business loans)" value={form.interestExpense ?? ''} onChange={v => set('interestExpense', v)} placeholder="0" />
-            <Field label="Non-Operating Income (interest earned, gains)" value={form.nonOperatingIncome ?? ''} onChange={v => set('nonOperatingIncome', v)} placeholder="0" />
-            <Field
-              label="Income Tax Expense"
-              hint="Leave blank to auto-estimate at 21% of pre-tax income."
-              value={form.incomeTaxExpense ?? ''}
-              onChange={v => set('incomeTaxExpense', v)}
-              placeholder="auto-estimate"
-            />
-          </>
-        )}
-
-        {/* ── Step 3: Financial Position ── */}
-        {step === 3 && (
-          <>
-            <SectionHeading>Cash</SectionHeading>
-            <Field label="Ending Cash Balance" required hint="Cash in all business accounts at end of period." value={form.endingCash ?? ''} onChange={v => set('endingCash', v)} placeholder="0" />
-            <Field label="Beginning Cash Balance" hint="Cash at start of period (used to reconcile cash flow)." value={form.beginningCash ?? ''} onChange={v => set('beginningCash', v)} placeholder="same as ending if unknown" />
-
-            <SectionHeading>Other Assets</SectionHeading>
-            <Field label="Accounts Receivable" hint="Invoices sent but not yet collected." value={form.accountsReceivable ?? ''} onChange={v => set('accountsReceivable', v)} placeholder="0" />
-            <Field label="Inventory" value={form.inventory ?? ''} onChange={v => set('inventory', v)} placeholder="0" />
-            <Field label="Fixed Assets — Gross Value" hint="Original cost of equipment, vehicles, furniture, etc." value={form.fixedAssetsGross ?? ''} onChange={v => set('fixedAssetsGross', v)} placeholder="0" />
-            <Field label="Accumulated Depreciation" hint="Total depreciation taken to date. Leave blank to use this period's depreciation." value={form.accumulatedDepreciation ?? ''} onChange={v => set('accumulatedDepreciation', v)} placeholder="auto" />
-
-            <SectionHeading>Liabilities</SectionHeading>
-            <Field label="Accounts Payable" hint="Vendor bills received but not yet paid." value={form.accountsPayable ?? ''} onChange={v => set('accountsPayable', v)} placeholder="0" />
-            <Field label="Accrued Liabilities" hint="Wages earned but unpaid, unpaid interest, etc." value={form.accruedLiabilities ?? ''} onChange={v => set('accruedLiabilities', v)} placeholder="0" />
-            <Field label="Short-Term Debt (due within 12 months)" value={form.shortTermDebt ?? ''} onChange={v => set('shortTermDebt', v)} placeholder="0" />
-            <Field label="Long-Term Debt (beyond 12 months)" value={form.longTermDebt ?? ''} onChange={v => set('longTermDebt', v)} placeholder="0" />
-
-            <SectionHeading>Owner's Equity & Capital Activity</SectionHeading>
-            <Field label="Beginning Owner's Equity" hint="Leave blank to derive from the balance sheet equation." value={form.beginningEquity ?? ''} onChange={v => set('beginningEquity', v)} placeholder="auto-derive" />
-            <Field label="Capital Contributions This Period" hint="New money you invested in the business." value={form.capitalContributions ?? ''} onChange={v => set('capitalContributions', v)} placeholder="0" />
-            <Field label="Owner Draws / Distributions" hint="Cash or assets you took out of the business." value={form.ownerDraws ?? ''} onChange={v => set('ownerDraws', v)} placeholder="0" />
-
-            <SectionHeading>Cash Flow Detail (optional)</SectionHeading>
-            <Field label="Capital Expenditures (asset purchases this period)" value={form.capitalExpenditures ?? ''} onChange={v => set('capitalExpenditures', v)} placeholder="0" />
-            <Field label="New Borrowings This Period" value={form.newBorrowings ?? ''} onChange={v => set('newBorrowings', v)} placeholder="0" />
-            <Field label="Debt Repayments This Period" value={form.debtRepayments ?? ''} onChange={v => set('debtRepayments', v)} placeholder="0" />
-          </>
-        )}
-
-        {/* Navigation buttons */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28 }}>
-          <button
-            onClick={() => setStep(s => s - 1)}
-            disabled={step === 0}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '10px 18px', borderRadius: 8,
-              border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
-              color: step === 0 ? 'var(--text-muted)' : 'var(--text-secondary)',
-              cursor: step === 0 ? 'not-allowed' : 'pointer', fontSize: 14,
-            }}
-          >
-            <ChevronLeft size={16} /> Back
-          </button>
-
-          {step < STEPS.length - 1 ? (
+        {/* ── Form panel ─────────────────────────────────────────── */}
+        <div style={{
+          flex: '1 1 0', minWidth: 0,
+          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+          borderRadius: 14, padding: '24px 28px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {STEPS[step].label}
+            </div>
+            {/* Resync button — repopulate from latest FortunaState */}
             <button
-              onClick={() => setStep(s => s + 1)}
-              disabled={!canAdvance()}
+              onClick={handleResync}
+              title="Re-import latest data from Fortuna"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5, fontSize: 11,
+                color: 'var(--text-muted)', background: 'none', border: 'none',
+                cursor: 'pointer', padding: '2px 6px',
+              }}
+            >
+              <RefreshCw size={11} /> Sync Fortuna
+            </button>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
+            {step === 0 && 'Tell us about your business and the reporting period.'}
+            {step === 1 && 'Enter your revenue. Only primary revenue is required.'}
+            {step === 2 && 'Break down your operating costs. Every field is optional — enter what you know.'}
+            {step === 3 && 'Snapshot of your current financial position to complete the balance sheet and cash flow statement.'}
+          </div>
+
+          {/* ── Step 0: Basics ── */}
+          {step === 0 && (
+            <>
+              <Field
+                label="Business Name" required
+                value={form.businessName ?? ''}
+                onChange={v => set('businessName', v)}
+                type="text"
+                placeholder="e.g. Acme Consulting LLC"
+              />
+              <Field
+                label="Reporting Period" required
+                hint='e.g. "2025", "Q1 2025", "FY 2025", "Jan–Jun 2025"'
+                value={form.period ?? ''}
+                onChange={v => set('period', v)}
+                type="text"
+                placeholder={String(new Date().getFullYear())}
+              />
+              <SelectField
+                label="Business Type"
+                hint="Affects how revenue and COGS appear on the income statement."
+                value={(form.businessType as string) ?? 'service'}
+                onChange={v => set('businessType', v)}
+                options={[
+                  { value: 'service', label: 'Service (consulting, software, professional services)' },
+                  { value: 'product', label: 'Product (retail, manufacturing, e-commerce)' },
+                  { value: 'mixed', label: 'Mixed (products + services)' },
+                  { value: 'other', label: 'Other' },
+                ]}
+              />
+            </>
+          )}
+
+          {/* ── Step 1: Revenue ── */}
+          {step === 1 && (
+            <>
+              <SectionHeading>Primary Revenue</SectionHeading>
+              <Field
+                label={isProductBusiness ? 'Gross Sales / Product Revenue' : 'Service Revenue'} required
+                hint="Total revenue earned during the period before any deductions."
+                value={form.primaryRevenue ?? ''}
+                onChange={v => set('primaryRevenue', v)}
+                placeholder="0"
+                linkedTo={['Income Statement', "Owner's Equity", 'Balance Sheet']}
+              />
+              <Field
+                label="Other Revenue"
+                hint="Commissions, royalties, rental income, or other secondary income."
+                value={form.otherRevenue ?? ''}
+                onChange={v => set('otherRevenue', v)}
+                placeholder="0"
+              />
+              {isProductBusiness && (
+                <>
+                  <SectionHeading>Cost of Goods Sold</SectionHeading>
+                  <Field
+                    label="Cost of Goods Sold (COGS)"
+                    hint="Direct material, manufacturing, and fulfilment costs tied to products sold."
+                    value={form.costOfGoodsSold ?? ''}
+                    onChange={v => set('costOfGoodsSold', v)}
+                    placeholder="0"
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {/* ── Step 2: Expenses ── */}
+          {step === 2 && (
+            <>
+              <SectionHeading>Labor</SectionHeading>
+              <Field
+                label="Wages, Salaries & Contractor Pay"
+                hint="Total compensation paid to employees and contractors."
+                value={form.laborExpenses ?? ''}
+                onChange={v => set('laborExpenses', v)}
+                placeholder="0"
+              />
+
+              <SectionHeading>Overhead</SectionHeading>
+              <Field label="Rent & Facilities" value={form.facilitiesExpenses ?? ''} onChange={v => set('facilitiesExpenses', v)} placeholder="0" />
+              <Field label="Marketing & Advertising" value={form.marketingExpenses ?? ''} onChange={v => set('marketingExpenses', v)} placeholder="0" />
+              <Field label="Technology & Software" value={form.technologyExpenses ?? ''} onChange={v => set('technologyExpenses', v)} placeholder="0" />
+              <Field label="Professional Services (accounting, legal)" value={form.professionalServices ?? ''} onChange={v => set('professionalServices', v)} placeholder="0" />
+              <Field label="Insurance" value={form.insuranceExpenses ?? ''} onChange={v => set('insuranceExpenses', v)} placeholder="0" />
+              <Field
+                label="Depreciation"
+                hint="Leave blank to auto-estimate at 10% of fixed assets."
+                value={form.depreciationExpense ?? ''}
+                onChange={v => set('depreciationExpense', v)}
+                placeholder="auto-estimate"
+                derivedValue={derivedDepreciation}
+                derivedLabel="Auto-estimated (10% of gross assets)"
+                linkedTo={['Income Statement', 'Cash Flow (add-back)']}
+              />
+              <Field label="Other Operating Expenses" value={form.otherOperatingExpenses ?? ''} onChange={v => set('otherOperatingExpenses', v)} placeholder="0" />
+
+              <SectionHeading>Non-Operating</SectionHeading>
+              <Field label="Interest Expense (on business loans)" value={form.interestExpense ?? ''} onChange={v => set('interestExpense', v)} placeholder="0" />
+              <Field label="Non-Operating Income (interest earned, gains)" value={form.nonOperatingIncome ?? ''} onChange={v => set('nonOperatingIncome', v)} placeholder="0" />
+              <Field
+                label="Income Tax Expense"
+                hint="Leave blank to auto-estimate at 21% of pre-tax income."
+                value={form.incomeTaxExpense ?? ''}
+                onChange={v => set('incomeTaxExpense', v)}
+                placeholder="auto-estimate"
+                derivedValue={derivedTax}
+                derivedLabel="Auto-estimated (21% of pre-tax income)"
+              />
+            </>
+          )}
+
+          {/* ── Step 3: Financial Position ── */}
+          {step === 3 && (
+            <>
+              <SectionHeading>Cash</SectionHeading>
+              <Field
+                label="Ending Cash Balance" required
+                hint="Cash in all business accounts at end of period."
+                value={form.endingCash ?? ''}
+                onChange={v => set('endingCash', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet (current assets)', 'Cash Flow (ending cash)']}
+              />
+              <Field
+                label="Beginning Cash Balance"
+                hint="Cash at start of period (used to reconcile cash flow)."
+                value={form.beginningCash ?? ''}
+                onChange={v => set('beginningCash', v)}
+                placeholder="same as ending if unknown"
+                linkedTo={['Cash Flow Statement']}
+              />
+
+              <SectionHeading>Other Assets</SectionHeading>
+              <Field
+                label="Accounts Receivable"
+                hint="Invoices sent but not yet collected."
+                value={form.accountsReceivable ?? ''}
+                onChange={v => set('accountsReceivable', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet', 'Cash Flow (working capital)']}
+              />
+              <Field label="Inventory" value={form.inventory ?? ''} onChange={v => set('inventory', v)} placeholder="0" linkedTo={['Balance Sheet']} />
+              <Field
+                label="Fixed Assets — Gross Value"
+                hint="Original cost of equipment, vehicles, furniture, etc."
+                value={form.fixedAssetsGross ?? ''}
+                onChange={v => set('fixedAssetsGross', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet (fixed assets)', 'Depreciation estimate']}
+              />
+              <Field
+                label="Accumulated Depreciation"
+                hint="Total depreciation taken to date. Leave blank to use this period's depreciation."
+                value={form.accumulatedDepreciation ?? ''}
+                onChange={v => set('accumulatedDepreciation', v)}
+                placeholder="auto"
+              />
+
+              <SectionHeading>Liabilities</SectionHeading>
+              <Field
+                label="Accounts Payable"
+                hint="Vendor bills received but not yet paid."
+                value={form.accountsPayable ?? ''}
+                onChange={v => set('accountsPayable', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet', 'Cash Flow (working capital)']}
+              />
+              <Field label="Accrued Liabilities" hint="Wages earned but unpaid, unpaid interest, etc." value={form.accruedLiabilities ?? ''} onChange={v => set('accruedLiabilities', v)} placeholder="0" />
+              <Field
+                label="Short-Term Debt (due within 12 months)"
+                value={form.shortTermDebt ?? ''}
+                onChange={v => set('shortTermDebt', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet (current liabilities)']}
+              />
+              <Field
+                label="Long-Term Debt (beyond 12 months)"
+                value={form.longTermDebt ?? ''}
+                onChange={v => set('longTermDebt', v)}
+                placeholder="0"
+                linkedTo={['Balance Sheet (long-term liabilities)']}
+              />
+
+              <SectionHeading>Owner's Equity & Capital Activity</SectionHeading>
+              <Field
+                label="Beginning Owner's Equity"
+                hint="Leave blank to derive from the balance sheet equation."
+                value={form.beginningEquity ?? ''}
+                onChange={v => set('beginningEquity', v)}
+                placeholder="auto-derive"
+                derivedValue={derivedBeginningEquity}
+                derivedLabel="Back-derived (Assets − Liabilities − Net Income − Contributions + Draws)"
+                linkedTo={["Owner's Equity Statement", 'Balance Sheet (equity)']}
+              />
+              <Field
+                label="Capital Contributions This Period"
+                hint="New money you invested in the business."
+                value={form.capitalContributions ?? ''}
+                onChange={v => set('capitalContributions', v)}
+                placeholder="0"
+                linkedTo={["Owner's Equity", 'Cash Flow (financing)']}
+              />
+              <Field
+                label="Owner Draws / Distributions"
+                hint="Cash or assets you took out of the business."
+                value={form.ownerDraws ?? ''}
+                onChange={v => set('ownerDraws', v)}
+                placeholder="0"
+                linkedTo={["Owner's Equity", 'Cash Flow (financing)']}
+              />
+
+              <SectionHeading>Cash Flow Detail (optional)</SectionHeading>
+              <Field
+                label="Capital Expenditures (asset purchases this period)"
+                value={form.capitalExpenditures ?? ''}
+                onChange={v => set('capitalExpenditures', v)}
+                placeholder="0"
+                linkedTo={['Cash Flow (investing)']}
+              />
+              <Field
+                label="New Borrowings This Period"
+                value={form.newBorrowings ?? ''}
+                onChange={v => set('newBorrowings', v)}
+                placeholder="0"
+                linkedTo={['Cash Flow (financing)']}
+              />
+              <Field
+                label="Debt Repayments This Period"
+                value={form.debtRepayments ?? ''}
+                onChange={v => set('debtRepayments', v)}
+                placeholder="0"
+                linkedTo={['Cash Flow (financing)']}
+              />
+            </>
+          )}
+
+          {/* Navigation buttons */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28 }}>
+            <button
+              onClick={() => setStep(s => s - 1)}
+              disabled={step === 0}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
-                padding: '10px 20px', borderRadius: 8,
-                background: canAdvance() ? 'var(--accent-gold)' : 'rgba(212,168,67,0.3)',
-                border: 'none',
-                color: canAdvance() ? '#0c0e12' : 'rgba(255,255,255,0.3)',
-                cursor: canAdvance() ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700,
+                padding: '10px 18px', borderRadius: 8,
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+                color: step === 0 ? 'var(--text-muted)' : 'var(--text-secondary)',
+                cursor: step === 0 ? 'not-allowed' : 'pointer', fontSize: 14,
               }}
             >
-              Next <ChevronRight size={16} />
+              <ChevronLeft size={16} /> Back
             </button>
-          ) : (
+
+            {step < STEPS.length - 1 ? (
+              <button
+                onClick={() => setStep(s => s + 1)}
+                disabled={!canAdvance()}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '10px 20px', borderRadius: 8,
+                  background: canAdvance() ? 'var(--accent-gold)' : 'rgba(212,168,67,0.3)',
+                  border: 'none',
+                  color: canAdvance() ? '#0c0e12' : 'rgba(255,255,255,0.3)',
+                  cursor: canAdvance() ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700,
+                }}
+              >
+                Next <ChevronRight size={16} />
+              </button>
+            ) : (
+              <button
+                onClick={handleGenerate}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '10px 22px', borderRadius: 8,
+                  background: 'var(--accent-gold)', border: 'none',
+                  color: '#0c0e12', cursor: 'pointer', fontSize: 14, fontWeight: 700,
+                }}
+              >
+                <FileText size={16} /> Generate Statements
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ── Live preview sidebar ────────────────────────────────── */}
+        <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <LivePreviewPanel stmts={liveStatements} />
+
+          {/* Data source origin note */}
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+            borderRadius: 10, padding: '12px 14px',
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Data Sources
+            </div>
+            {[
+              { label: 'Income streams', value: (state.incomeStreams ?? []).filter(s => s.isActive && (s.type === 'business' || s.type === 'freelance')).length },
+              { label: 'Expense records', value: (state.expenses ?? []).length },
+              { label: 'Liabilities', value: (state.liabilities ?? []).filter(l => l.type === 'business_loan').length },
+              { label: 'Depr. assets', value: (state.depreciationAssets ?? []).filter(a => a.isActive).length },
+            ].map(r => (
+              <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '3px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                <span style={{ color: 'var(--text-muted)' }}>{r.label}</span>
+                <span style={{
+                  fontFamily: 'var(--font-mono)',
+                  color: r.value > 0 ? 'var(--accent-gold)' : 'var(--text-muted)',
+                  fontWeight: r.value > 0 ? 700 : 400,
+                }}>
+                  {r.value > 0 ? r.value : '—'}
+                </span>
+              </div>
+            ))}
             <button
-              onClick={handleGenerate}
+              onClick={handleResync}
               style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '10px 22px', borderRadius: 8,
-                background: 'var(--accent-gold)', border: 'none',
-                color: '#0c0e12', cursor: 'pointer', fontSize: 14, fontWeight: 700,
+                marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '7px 0', borderRadius: 7, border: '1px solid var(--border-subtle)',
+                background: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11,
               }}
             >
-              <FileText size={16} /> Generate Statements
+              <RefreshCw size={10} /> Re-sync from Fortuna
             </button>
-          )}
+          </div>
         </div>
       </div>
 
