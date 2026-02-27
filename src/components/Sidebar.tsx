@@ -103,6 +103,7 @@ const sections: NavSection[] = [
     id: 'output', label: 'Output & Export', friendlyLabel: 'Reports',
     items: [
       { key: 'reports', label: 'Reports', friendlyLabel: 'Reports', icon: <FileText size={18} />, core: true },
+      { key: 'fin-statements', label: 'Financial Statements', friendlyLabel: 'All 4 Statements', icon: <FileSpreadsheet size={18} />, core: true },
       { key: 'pnl', label: 'P&L Statement', friendlyLabel: 'Profit & Loss', icon: <BarChart size={18} /> },
       { key: 'documents', label: 'Documents', friendlyLabel: 'Documents', icon: <FileOutput size={18} /> },
       { key: 'taxdocs', label: 'Tax Documents', friendlyLabel: 'Tax Forms', icon: <FileSpreadsheet size={18} /> },

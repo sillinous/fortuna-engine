@@ -71,8 +71,9 @@ const FinTechConnections = lazy(() => import('./views/FinTechConnections'))
 const TransactionReview = lazy(() => import('./views/TransactionReview'))
 const FinTechHub = lazy(() => import('./views/FinTechHub'))
 const ReceiptReconciler = lazy(() => import('./views/ReceiptReconciler').then(m => ({ default: m.ReceiptReconciler })))
+const FinancialStatementsWizard = lazy(() => import('./views/FinancialStatementsWizard').then(m => ({ default: m.FinancialStatementsWizard })))
 
-export type ViewKey = 'dashboard' | 'tax' | 'entity' | 'revenue' | 'risk' | 'automations' | 'advisor' | 'setup' | 'scenarios' | 'timeline' | 'flow' | 'reports' | 'cashflow' | 'audit' | 'alerts' | 'calendar' | 'documents' | 'import' | 'receipt-scan' | 'workflows' | 'optimizer' | 'health' | 'cpa' | 'data' | 'history' | 'taxdocs' | 'retirement' | 'arbitrage' | 'multiyear' | 'depreciation' | 'credits' | 'nexus' | 'pnl' | 'paycheck' | 'deductions' | 'marginal' | 'goals' | 'taxprep' | 'workspace' | 'portfolio' | 'quickbooks' | 'fintech' | 'fintech-hub' | 'txn-review' | 'receipt-reconcile'
+export type ViewKey = 'dashboard' | 'tax' | 'entity' | 'revenue' | 'risk' | 'automations' | 'advisor' | 'setup' | 'scenarios' | 'timeline' | 'flow' | 'reports' | 'cashflow' | 'audit' | 'alerts' | 'calendar' | 'documents' | 'import' | 'receipt-scan' | 'workflows' | 'optimizer' | 'health' | 'cpa' | 'data' | 'history' | 'taxdocs' | 'retirement' | 'arbitrage' | 'multiyear' | 'depreciation' | 'credits' | 'nexus' | 'pnl' | 'paycheck' | 'deductions' | 'marginal' | 'goals' | 'taxprep' | 'workspace' | 'portfolio' | 'quickbooks' | 'fintech' | 'fintech-hub' | 'txn-review' | 'receipt-reconcile' | 'fin-statements'
 
 const VALID_VIEWS = new Set<ViewKey>([
   'dashboard','tax','entity','revenue','risk','automations','advisor','setup',
@@ -80,6 +81,7 @@ const VALID_VIEWS = new Set<ViewKey>([
   'documents', 'import', 'receipt-scan', 'workflows', 'optimizer', 'health', 'cpa', 'data', 'history', 'taxdocs',
   'retirement','arbitrage','multiyear','depreciation','credits','nexus','pnl',
   'paycheck', 'deductions', 'marginal', 'goals', 'taxprep', 'workspace', 'portfolio', 'quickbooks', 'fintech', 'fintech-hub', 'txn-review', 'receipt-reconcile',
+  'fin-statements',
 ])
 
 function AppInner() {
@@ -212,6 +214,7 @@ function AppInner() {
       case 'txn-review': return <TransactionReview />
       case 'fintech-hub': return <FinTechHub />
       case 'receipt-reconcile': return <ReceiptReconciler />
+      case 'fin-statements': return <FinancialStatementsWizard />
       default: return <Dashboard onNavigate={setActiveView} />
     }
   }, [activeView, state.onboardingComplete, setActiveView])
